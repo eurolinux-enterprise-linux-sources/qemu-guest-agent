@@ -25,6 +25,10 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qemu-common.h"
+#include "cpu.h"
 #include "sysemu/sysemu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
@@ -161,7 +165,7 @@ static pflash_t *xtfpga_flash_init(MemoryRegion *address_space,
     qdev_prop_set_uint32(dev, "num-blocks",
                          board->flash_size / board->flash_sector_size);
     qdev_prop_set_uint64(dev, "sector-length", board->flash_sector_size);
-    qdev_prop_set_uint8(dev, "width", 4);
+    qdev_prop_set_uint8(dev, "width", 2);
     qdev_prop_set_bit(dev, "big-endian", be);
     qdev_prop_set_string(dev, "name", "lx60.io.flash");
     qdev_init_nofail(dev);
@@ -261,7 +265,7 @@ static void lx_init(const LxBoardDesc *board, MachineState *machine)
     }
 
     if (!serial_hds[0]) {
-        serial_hds[0] = qemu_chr_new("serial0", "null", NULL);
+        serial_hds[0] = qemu_chr_new("serial0", "null");
     }
 
     serial_mm_init(system_io, 0x0d050020, 2, xtensa_get_extint(env, 0),
@@ -354,7 +358,7 @@ static void lx_init(const LxBoardDesc *board, MachineState *machine)
         uint64_t elf_entry;
         uint64_t elf_lowaddr;
         int success = load_elf(kernel_filename, translate_phys_addr, cpu,
-                &elf_entry, &elf_lowaddr, NULL, be, EM_XTENSA, 0);
+                &elf_entry, &elf_lowaddr, NULL, be, EM_XTENSA, 0, 0);
         if (success > 0) {
             entry_point = elf_entry;
         } else {
@@ -509,4 +513,4 @@ static void xtensa_lx_machines_init(void)
     type_register_static(&xtensa_kc705_type);
 }
 
-machine_init(xtensa_lx_machines_init)
+type_init(xtensa_lx_machines_init)

@@ -17,10 +17,20 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
+#include "exec/exec-all.h"
 #include "qemu/host-utils.h"
 #include "exec/helper-proto.h"
 #include "sysemu/sysemu.h"
+
+void cpu_raise_exception_ra(CPUSPARCState *env, int tt, uintptr_t ra)
+{
+    CPUState *cs = CPU(sparc_env_get_cpu(env));
+
+    cs->exception_index = tt;
+    cpu_loop_exit_restore(cs, ra);
+}
 
 void helper_raise_exception(CPUSPARCState *env, int tt)
 {
@@ -51,10 +61,16 @@ void helper_tick_set_count(void *opaque, uint64_t count)
 #endif
 }
 
-uint64_t helper_tick_get_count(void *opaque)
+uint64_t helper_tick_get_count(CPUSPARCState *env, void *opaque, int mem_idx)
 {
 #if !defined(CONFIG_USER_ONLY)
-    return cpu_tick_get_count(opaque);
+    CPUTimer *timer = opaque;
+
+    if (timer->npt && mem_idx < MMU_KERNEL_IDX) {
+        cpu_raise_exception_ra(env, TT_PRIV_INSN, GETPC());
+    }
+
+    return cpu_tick_get_count(timer);
 #else
     return 0;
 #endif
@@ -68,10 +84,9 @@ void helper_tick_set_limit(void *opaque, uint64_t limit)
 }
 #endif
 
-static target_ulong helper_udiv_common(CPUSPARCState *env, target_ulong a,
-                                       target_ulong b, int cc)
+static target_ulong do_udiv(CPUSPARCState *env, target_ulong a,
+                            target_ulong b, int cc, uintptr_t ra)
 {
-    SPARCCPU *cpu = sparc_env_get_cpu(env);
     int overflow = 0;
     uint64_t x0;
     uint32_t x1;
@@ -80,8 +95,7 @@ static target_ulong helper_udiv_common(CPUSPARCState *env, target_ulong a,
     x1 = (b & 0xffffffff);
 
     if (x1 == 0) {
-        cpu_restore_state(CPU(cpu), GETPC());
-        helper_raise_exception(env, TT_DIV_ZERO);
+        cpu_raise_exception_ra(env, TT_DIV_ZERO, ra);
     }
 
     x0 = x0 / x1;
@@ -100,18 +114,17 @@ static target_ulong helper_udiv_common(CPUSPARCState *env, target_ulong a,
 
 target_ulong helper_udiv(CPUSPARCState *env, target_ulong a, target_ulong b)
 {
-    return helper_udiv_common(env, a, b, 0);
+    return do_udiv(env, a, b, 0, GETPC());
 }
 
 target_ulong helper_udiv_cc(CPUSPARCState *env, target_ulong a, target_ulong b)
 {
-    return helper_udiv_common(env, a, b, 1);
+    return do_udiv(env, a, b, 1, GETPC());
 }
 
-static target_ulong helper_sdiv_common(CPUSPARCState *env, target_ulong a,
-                                       target_ulong b, int cc)
+static target_ulong do_sdiv(CPUSPARCState *env, target_ulong a,
+                            target_ulong b, int cc, uintptr_t ra)
 {
-    SPARCCPU *cpu = sparc_env_get_cpu(env);
     int overflow = 0;
     int64_t x0;
     int32_t x1;
@@ -120,8 +133,7 @@ static target_ulong helper_sdiv_common(CPUSPARCState *env, target_ulong a,
     x1 = (b & 0xffffffff);
 
     if (x1 == 0) {
-        cpu_restore_state(CPU(cpu), GETPC());
-        helper_raise_exception(env, TT_DIV_ZERO);
+        cpu_raise_exception_ra(env, TT_DIV_ZERO, ra);
     } else if (x1 == -1 && x0 == INT64_MIN) {
         x0 = INT32_MAX;
         overflow = 1;
@@ -143,12 +155,12 @@ static target_ulong helper_sdiv_common(CPUSPARCState *env, target_ulong a,
 
 target_ulong helper_sdiv(CPUSPARCState *env, target_ulong a, target_ulong b)
 {
-    return helper_sdiv_common(env, a, b, 0);
+    return do_sdiv(env, a, b, 0, GETPC());
 }
 
 target_ulong helper_sdiv_cc(CPUSPARCState *env, target_ulong a, target_ulong b)
 {
-    return helper_sdiv_common(env, a, b, 1);
+    return do_sdiv(env, a, b, 1, GETPC());
 }
 
 #ifdef TARGET_SPARC64
@@ -156,10 +168,7 @@ int64_t helper_sdivx(CPUSPARCState *env, int64_t a, int64_t b)
 {
     if (b == 0) {
         /* Raise divide by zero trap.  */
-        SPARCCPU *cpu = sparc_env_get_cpu(env);
-
-        cpu_restore_state(CPU(cpu), GETPC());
-        helper_raise_exception(env, TT_DIV_ZERO);
+        cpu_raise_exception_ra(env, TT_DIV_ZERO, GETPC());
     } else if (b == -1) {
         /* Avoid overflow trap with i386 divide insn.  */
         return -a;
@@ -172,10 +181,7 @@ uint64_t helper_udivx(CPUSPARCState *env, uint64_t a, uint64_t b)
 {
     if (b == 0) {
         /* Raise divide by zero trap.  */
-        SPARCCPU *cpu = sparc_env_get_cpu(env);
-
-        cpu_restore_state(CPU(cpu), GETPC());
-        helper_raise_exception(env, TT_DIV_ZERO);
+        cpu_raise_exception_ra(env, TT_DIV_ZERO, GETPC());
     }
     return a / b;
 }
@@ -184,7 +190,6 @@ uint64_t helper_udivx(CPUSPARCState *env, uint64_t a, uint64_t b)
 target_ulong helper_taddcctv(CPUSPARCState *env, target_ulong src1,
                              target_ulong src2)
 {
-    SPARCCPU *cpu = sparc_env_get_cpu(env);
     target_ulong dst;
 
     /* Tag overflow occurs if either input has bits 0 or 1 set.  */
@@ -207,14 +212,12 @@ target_ulong helper_taddcctv(CPUSPARCState *env, target_ulong src1,
     return dst;
 
  tag_overflow:
-    cpu_restore_state(CPU(cpu), GETPC());
-    helper_raise_exception(env, TT_TOVF);
+    cpu_raise_exception_ra(env, TT_TOVF, GETPC());
 }
 
 target_ulong helper_tsubcctv(CPUSPARCState *env, target_ulong src1,
                              target_ulong src2)
 {
-    SPARCCPU *cpu = sparc_env_get_cpu(env);
     target_ulong dst;
 
     /* Tag overflow occurs if either input has bits 0 or 1 set.  */
@@ -237,8 +240,7 @@ target_ulong helper_tsubcctv(CPUSPARCState *env, target_ulong src1,
     return dst;
 
  tag_overflow:
-    cpu_restore_state(CPU(cpu), GETPC());
-    helper_raise_exception(env, TT_TOVF);
+    cpu_raise_exception_ra(env, TT_TOVF, GETPC());
 }
 
 #ifndef TARGET_SPARC64

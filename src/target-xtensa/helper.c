@@ -25,6 +25,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
 #include "exec/gdbstub.h"
@@ -107,7 +108,7 @@ void xtensa_breakpoint_handler(CPUState *cs)
             if (cause) {
                 debug_exception_env(env, cause);
             }
-            cpu_resume_from_signal(cs, NULL);
+            cpu_loop_exit_noexc(cs);
         }
     }
 }
@@ -254,8 +255,8 @@ void xtensa_cpu_do_interrupt(CPUState *cs)
                     env->config->exception_vector[cs->exception_index]);
             env->exception_taken = 1;
         } else {
-            qemu_log("%s(pc = %08x) bad exception_index: %d\n",
-                    __func__, env->pc, cs->exception_index);
+            qemu_log_mask(CPU_LOG_INT, "%s(pc = %08x) bad exception_index: %d\n",
+                          __func__, env->pc, cs->exception_index);
         }
         break;
 

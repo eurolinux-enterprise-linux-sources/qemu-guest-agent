@@ -25,8 +25,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include <stdint.h>
+#include "qemu/osdep.h"
+#include "qemu-common.h"
+#include "cpu.h"
 #include <zlib.h>
+#include "qapi-event.h"
+#include "qemu/cutils.h"
 #include "qemu/bitops.h"
 #include "qemu/bitmap.h"
 #include "qemu/timer.h"
@@ -39,6 +43,7 @@
 #include "trace.h"
 #include "exec/ram_addr.h"
 #include "qemu/rcu_queue.h"
+#include "migration/colo.h"
 
 #ifdef DEBUG_MIGRATION_RAM
 #define DPRINTF(fmt, ...) \
@@ -65,11 +70,11 @@ static uint64_t bitmap_sync_count;
 /* 0x80 is reserved in migration.h start with 0x100 next */
 #define RAM_SAVE_FLAG_COMPRESS_PAGE    0x100
 
-static const uint8_t ZERO_TARGET_PAGE[TARGET_PAGE_SIZE];
+static uint8_t *ZERO_TARGET_PAGE;
 
 static inline bool is_zero_range(uint8_t *p, uint64_t size)
 {
-    return buffer_find_nonzero_offset(p, size) == size;
+    return buffer_is_zero(p, size);
 }
 
 /* struct contains XBZRLE cache and a static page
@@ -249,8 +254,8 @@ static struct BitmapRcu {
 } *migration_bitmap_rcu;
 
 struct CompressParam {
-    bool start;
     bool done;
+    bool quit;
     QEMUFile *file;
     QemuMutex mutex;
     QemuCond cond;
@@ -260,11 +265,12 @@ struct CompressParam {
 typedef struct CompressParam CompressParam;
 
 struct DecompressParam {
-    bool start;
+    bool done;
+    bool quit;
     QemuMutex mutex;
     QemuCond cond;
     void *des;
-    uint8 *compbuf;
+    uint8_t *compbuf;
     int len;
 };
 typedef struct DecompressParam DecompressParam;
@@ -275,46 +281,47 @@ static QemuThread *compress_threads;
  * one of the compression threads has finished the compression.
  * comp_done_lock is used to co-work with comp_done_cond.
  */
-static QemuMutex *comp_done_lock;
-static QemuCond *comp_done_cond;
+static QemuMutex comp_done_lock;
+static QemuCond comp_done_cond;
 /* The empty QEMUFileOps will be used by file in CompressParam */
 static const QEMUFileOps empty_ops = { };
 
 static bool compression_switch;
-static bool quit_comp_thread;
-static bool quit_decomp_thread;
 static DecompressParam *decomp_param;
 static QemuThread *decompress_threads;
-static uint8_t *compressed_data_buf;
+static QemuMutex decomp_done_lock;
+static QemuCond decomp_done_cond;
 
-static int do_compress_ram_page(CompressParam *param);
+static int do_compress_ram_page(QEMUFile *f, RAMBlock *block,
+                                ram_addr_t offset);
 
 static void *do_data_compress(void *opaque)
 {
     CompressParam *param = opaque;
+    RAMBlock *block;
+    ram_addr_t offset;
 
-    while (!quit_comp_thread) {
-        qemu_mutex_lock(&param->mutex);
-        /* Re-check the quit_comp_thread in case of
-         * terminate_compression_threads is called just before
-         * qemu_mutex_lock(&param->mutex) and after
-         * while(!quit_comp_thread), re-check it here can make
-         * sure the compression thread terminate as expected.
-         */
-        while (!param->start && !quit_comp_thread) {
+    qemu_mutex_lock(&param->mutex);
+    while (!param->quit) {
+        if (param->block) {
+            block = param->block;
+            offset = param->offset;
+            param->block = NULL;
+            qemu_mutex_unlock(&param->mutex);
+
+            do_compress_ram_page(param->file, block, offset);
+
+            qemu_mutex_lock(&comp_done_lock);
+            param->done = true;
+            qemu_cond_signal(&comp_done_cond);
+            qemu_mutex_unlock(&comp_done_lock);
+
+            qemu_mutex_lock(&param->mutex);
+        } else {
             qemu_cond_wait(&param->cond, &param->mutex);
         }
-        if (!quit_comp_thread) {
-            do_compress_ram_page(param);
-        }
-        param->start = false;
-        qemu_mutex_unlock(&param->mutex);
-
-        qemu_mutex_lock(comp_done_lock);
-        param->done = true;
-        qemu_cond_signal(comp_done_cond);
-        qemu_mutex_unlock(comp_done_lock);
     }
+    qemu_mutex_unlock(&param->mutex);
 
     return NULL;
 }
@@ -324,9 +331,9 @@ static inline void terminate_compression_threads(void)
     int idx, thread_count;
 
     thread_count = migrate_compress_threads();
-    quit_comp_thread = true;
     for (idx = 0; idx < thread_count; idx++) {
         qemu_mutex_lock(&comp_param[idx].mutex);
+        comp_param[idx].quit = true;
         qemu_cond_signal(&comp_param[idx].cond);
         qemu_mutex_unlock(&comp_param[idx].mutex);
     }
@@ -347,16 +354,12 @@ void migrate_compress_threads_join(void)
         qemu_mutex_destroy(&comp_param[i].mutex);
         qemu_cond_destroy(&comp_param[i].cond);
     }
-    qemu_mutex_destroy(comp_done_lock);
-    qemu_cond_destroy(comp_done_cond);
+    qemu_mutex_destroy(&comp_done_lock);
+    qemu_cond_destroy(&comp_done_cond);
     g_free(compress_threads);
     g_free(comp_param);
-    g_free(comp_done_cond);
-    g_free(comp_done_lock);
     compress_threads = NULL;
     comp_param = NULL;
-    comp_done_cond = NULL;
-    comp_done_lock = NULL;
 }
 
 void migrate_compress_threads_create(void)
@@ -366,21 +369,19 @@ void migrate_compress_threads_create(void)
     if (!migrate_use_compression()) {
         return;
     }
-    quit_comp_thread = false;
     compression_switch = true;
     thread_count = migrate_compress_threads();
     compress_threads = g_new0(QemuThread, thread_count);
     comp_param = g_new0(CompressParam, thread_count);
-    comp_done_cond = g_new0(QemuCond, 1);
-    comp_done_lock = g_new0(QemuMutex, 1);
-    qemu_cond_init(comp_done_cond);
-    qemu_mutex_init(comp_done_lock);
+    qemu_cond_init(&comp_done_cond);
+    qemu_mutex_init(&comp_done_lock);
     for (i = 0; i < thread_count; i++) {
-        /* com_param[i].file is just used as a dummy buffer to save data, set
-         * it's ops to empty.
+        /* comp_param[i].file is just used as a dummy buffer to save data,
+         * set its ops to empty.
          */
         comp_param[i].file = qemu_fopen_ops(NULL, &empty_ops);
         comp_param[i].done = true;
+        comp_param[i].quit = false;
         qemu_mutex_init(&comp_param[i].mutex);
         qemu_cond_init(&comp_param[i].cond);
         qemu_thread_create(compress_threads + i, "compress",
@@ -426,10 +427,8 @@ static size_t save_page_header(QEMUFile *f, RAMBlock *block, ram_addr_t offset)
 static void mig_throttle_guest_down(void)
 {
     MigrationState *s = migrate_get_current();
-    uint64_t pct_initial =
-            s->parameters[MIGRATION_PARAMETER_X_CPU_THROTTLE_INITIAL];
-    uint64_t pct_icrement =
-            s->parameters[MIGRATION_PARAMETER_X_CPU_THROTTLE_INCREMENT];
+    uint64_t pct_initial = s->parameters.cpu_throttle_initial;
+    uint64_t pct_icrement = s->parameters.cpu_throttle_increment;
 
     /* We have not started throttling yet. Let's start it. */
     if (!cpu_throttle_active()) {
@@ -609,7 +608,6 @@ static void migration_bitmap_sync_init(void)
     iterations_prev = 0;
 }
 
-/* Called with iothread lock held, to protect ram_list.dirty_memory[] */
 static void migration_bitmap_sync(void)
 {
     RAMBlock *block;
@@ -629,7 +627,7 @@ static void migration_bitmap_sync(void)
     }
 
     trace_migration_bitmap_sync_start();
-    address_space_sync_dirty_bitmap(&address_space_memory);
+    memory_global_dirty_log_sync();
 
     qemu_mutex_lock(&migration_bitmap_mutex);
     rcu_read_lock();
@@ -682,6 +680,9 @@ static void migration_bitmap_sync(void)
         num_dirty_pages_period = 0;
     }
     s->dirty_sync_count = bitmap_sync_count;
+    if (migrate_use_events()) {
+        qapi_event_send_migration_pass(bitmap_sync_count, NULL);
+    }
 }
 
 /**
@@ -726,7 +727,7 @@ static int save_zero_page(QEMUFile *f, RAMBlock *block, ram_addr_t offset,
  * @last_stage: if we are at the completion stage
  * @bytes_transferred: increase it with the number of transferred bytes
  */
-static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
+static int ram_save_page(QEMUFile *f, PageSearchStatus *pss,
                          bool last_stage, uint64_t *bytes_transferred)
 {
     int pages = -1;
@@ -735,6 +736,8 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
     uint8_t *p;
     int ret;
     bool send_async = true;
+    RAMBlock *block = pss->block;
+    ram_addr_t offset = pss->offset;
 
     p = block->host + offset;
 
@@ -769,7 +772,9 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
              * page would be stale
              */
             xbzrle_cache_zero_page(current_addr);
-        } else if (!ram_bulk_stage && migrate_use_xbzrle()) {
+        } else if (!ram_bulk_stage &&
+                   !migration_in_postcopy(migrate_get_current()) &&
+                   migrate_use_xbzrle()) {
             pages = save_xbzrle_page(f, &p, current_addr, block,
                                      offset, last_stage, bytes_transferred);
             if (!last_stage) {
@@ -800,39 +805,25 @@ static int ram_save_page(QEMUFile *f, RAMBlock* block, ram_addr_t offset,
     return pages;
 }
 
-static int do_compress_ram_page(CompressParam *param)
+static int do_compress_ram_page(QEMUFile *f, RAMBlock *block,
+                                ram_addr_t offset)
 {
     int bytes_sent, blen;
-    uint8_t *p;
-    RAMBlock *block = param->block;
-    ram_addr_t offset = param->offset;
+    uint8_t *p = block->host + (offset & TARGET_PAGE_MASK);
 
-    p = block->host + (offset & TARGET_PAGE_MASK);
-
-    bytes_sent = save_page_header(param->file, block, offset |
+    bytes_sent = save_page_header(f, block, offset |
                                   RAM_SAVE_FLAG_COMPRESS_PAGE);
-    blen = qemu_put_compression_data(param->file, p, TARGET_PAGE_SIZE,
+    blen = qemu_put_compression_data(f, p, TARGET_PAGE_SIZE,
                                      migrate_compress_level());
-    bytes_sent += blen;
+    if (blen < 0) {
+        bytes_sent = 0;
+        qemu_file_set_error(migrate_get_current()->to_dst_file, blen);
+        error_report("compressed data failed!");
+    } else {
+        bytes_sent += blen;
+    }
 
     return bytes_sent;
-}
-
-static inline void start_compression(CompressParam *param)
-{
-    param->done = false;
-    qemu_mutex_lock(&param->mutex);
-    param->start = true;
-    qemu_cond_signal(&param->cond);
-    qemu_mutex_unlock(&param->mutex);
-}
-
-static inline void start_decompression(DecompressParam *param)
-{
-    qemu_mutex_lock(&param->mutex);
-    param->start = true;
-    qemu_cond_signal(&param->cond);
-    qemu_mutex_unlock(&param->mutex);
 }
 
 static uint64_t bytes_transferred;
@@ -845,18 +836,22 @@ static void flush_compressed_data(QEMUFile *f)
         return;
     }
     thread_count = migrate_compress_threads();
+
+    qemu_mutex_lock(&comp_done_lock);
     for (idx = 0; idx < thread_count; idx++) {
-        if (!comp_param[idx].done) {
-            qemu_mutex_lock(comp_done_lock);
-            while (!comp_param[idx].done && !quit_comp_thread) {
-                qemu_cond_wait(comp_done_cond, comp_done_lock);
-            }
-            qemu_mutex_unlock(comp_done_lock);
+        while (!comp_param[idx].done) {
+            qemu_cond_wait(&comp_done_cond, &comp_done_lock);
         }
-        if (!quit_comp_thread) {
+    }
+    qemu_mutex_unlock(&comp_done_lock);
+
+    for (idx = 0; idx < thread_count; idx++) {
+        qemu_mutex_lock(&comp_param[idx].mutex);
+        if (!comp_param[idx].quit) {
             len = qemu_put_qemu_file(f, comp_param[idx].file);
             bytes_transferred += len;
         }
+        qemu_mutex_unlock(&comp_param[idx].mutex);
     }
 }
 
@@ -874,13 +869,16 @@ static int compress_page_with_multi_thread(QEMUFile *f, RAMBlock *block,
     int idx, thread_count, bytes_xmit = -1, pages = -1;
 
     thread_count = migrate_compress_threads();
-    qemu_mutex_lock(comp_done_lock);
+    qemu_mutex_lock(&comp_done_lock);
     while (true) {
         for (idx = 0; idx < thread_count; idx++) {
             if (comp_param[idx].done) {
+                comp_param[idx].done = false;
                 bytes_xmit = qemu_put_qemu_file(f, comp_param[idx].file);
+                qemu_mutex_lock(&comp_param[idx].mutex);
                 set_compress_params(&comp_param[idx], block, offset);
-                start_compression(&comp_param[idx]);
+                qemu_cond_signal(&comp_param[idx].cond);
+                qemu_mutex_unlock(&comp_param[idx].mutex);
                 pages = 1;
                 acct_info.norm_pages++;
                 *bytes_transferred += bytes_xmit;
@@ -890,10 +888,10 @@ static int compress_page_with_multi_thread(QEMUFile *f, RAMBlock *block,
         if (pages > 0) {
             break;
         } else {
-            qemu_cond_wait(comp_done_cond, comp_done_lock);
+            qemu_cond_wait(&comp_done_cond, &comp_done_lock);
         }
     }
-    qemu_mutex_unlock(comp_done_lock);
+    qemu_mutex_unlock(&comp_done_lock);
 
     return pages;
 }
@@ -909,26 +907,24 @@ static int compress_page_with_multi_thread(QEMUFile *f, RAMBlock *block,
  * @last_stage: if we are at the completion stage
  * @bytes_transferred: increase it with the number of transferred bytes
  */
-static int ram_save_compressed_page(QEMUFile *f, RAMBlock *block,
-                                    ram_addr_t offset, bool last_stage,
+static int ram_save_compressed_page(QEMUFile *f, PageSearchStatus *pss,
+                                    bool last_stage,
                                     uint64_t *bytes_transferred)
 {
     int pages = -1;
-    uint64_t bytes_xmit;
+    uint64_t bytes_xmit = 0;
     uint8_t *p;
-    int ret;
+    int ret, blen;
+    RAMBlock *block = pss->block;
+    ram_addr_t offset = pss->offset;
 
     p = block->host + offset;
 
-    bytes_xmit = 0;
     ret = ram_control_save_page(f, block->offset,
                                 offset, TARGET_PAGE_SIZE, &bytes_xmit);
     if (bytes_xmit) {
         *bytes_transferred += bytes_xmit;
         pages = 1;
-    }
-    if (block == last_sent_block) {
-        offset |= RAM_SAVE_FLAG_CONTINUE;
     }
     if (ret != RAM_SAVE_CONTROL_NOT_SUPP) {
         if (ret != RAM_SAVE_CONTROL_DELAYED) {
@@ -949,17 +945,22 @@ static int ram_save_compressed_page(QEMUFile *f, RAMBlock *block,
             flush_compressed_data(f);
             pages = save_zero_page(f, block, offset, p, bytes_transferred);
             if (pages == -1) {
-                set_compress_params(&comp_param[0], block, offset);
-                /* Use the qemu thread to compress the data to make sure the
-                 * first page is sent out before other pages
-                 */
-                bytes_xmit = do_compress_ram_page(&comp_param[0]);
-                acct_info.norm_pages++;
-                qemu_put_qemu_file(f, comp_param[0].file);
-                *bytes_transferred += bytes_xmit;
-                pages = 1;
+                /* Make sure the first page is sent out before other pages */
+                bytes_xmit = save_page_header(f, block, offset |
+                                              RAM_SAVE_FLAG_COMPRESS_PAGE);
+                blen = qemu_put_compression_data(f, p, TARGET_PAGE_SIZE,
+                                                 migrate_compress_level());
+                if (blen > 0) {
+                    *bytes_transferred += bytes_xmit + blen;
+                    acct_info.norm_pages++;
+                    pages = 1;
+                } else {
+                    qemu_file_set_error(f, blen);
+                    error_report("compressed data failed!");
+                }
             }
         } else {
+            offset |= RAM_SAVE_FLAG_CONTINUE;
             pages = save_zero_page(f, block, offset, p, bytes_transferred);
             if (pages == -1) {
                 pages = compress_page_with_multi_thread(f, block, offset,
@@ -1162,6 +1163,7 @@ int ram_save_queue_pages(MigrationState *ms, const char *rbname,
 {
     RAMBlock *ramblock;
 
+    ms->postcopy_requests++;
     rcu_read_lock();
     if (!rbname) {
         /* Reuse last RAMBlock */
@@ -1226,7 +1228,7 @@ err:
  * Returns: Number of pages written.
  */
 static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
-                                RAMBlock *block, ram_addr_t offset,
+                                PageSearchStatus *pss,
                                 bool last_stage,
                                 uint64_t *bytes_transferred,
                                 ram_addr_t dirty_ram_abs)
@@ -1237,11 +1239,11 @@ static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
     if (migration_bitmap_clear_dirty(dirty_ram_abs)) {
         unsigned long *unsentmap;
         if (compression_switch && migrate_use_compression()) {
-            res = ram_save_compressed_page(f, block, offset,
+            res = ram_save_compressed_page(f, pss,
                                            last_stage,
                                            bytes_transferred);
         } else {
-            res = ram_save_page(f, block, offset, last_stage,
+            res = ram_save_page(f, pss, last_stage,
                                 bytes_transferred);
         }
 
@@ -1257,7 +1259,7 @@ static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
          * to the stream.
          */
         if (res > 0) {
-            last_sent_block = block;
+            last_sent_block = pss->block;
         }
     }
 
@@ -1265,7 +1267,7 @@ static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
 }
 
 /**
- * ram_save_host_page: Starting at *offset send pages upto the end
+ * ram_save_host_page: Starting at *offset send pages up to the end
  *                     of the current host page.  It's valid for the initial
  *                     offset to point into the middle of a host page
  *                     in which case the remainder of the hostpage is sent.
@@ -1281,26 +1283,27 @@ static int ram_save_target_page(MigrationState *ms, QEMUFile *f,
  * @bytes_transferred: increase it with the number of transferred bytes
  * @dirty_ram_abs: Address of the start of the dirty page in ram_addr_t space
  */
-static int ram_save_host_page(MigrationState *ms, QEMUFile *f, RAMBlock *block,
-                              ram_addr_t *offset, bool last_stage,
+static int ram_save_host_page(MigrationState *ms, QEMUFile *f,
+                              PageSearchStatus *pss,
+                              bool last_stage,
                               uint64_t *bytes_transferred,
                               ram_addr_t dirty_ram_abs)
 {
     int tmppages, pages = 0;
     do {
-        tmppages = ram_save_target_page(ms, f, block, *offset, last_stage,
+        tmppages = ram_save_target_page(ms, f, pss, last_stage,
                                         bytes_transferred, dirty_ram_abs);
         if (tmppages < 0) {
             return tmppages;
         }
 
         pages += tmppages;
-        *offset += TARGET_PAGE_SIZE;
+        pss->offset += TARGET_PAGE_SIZE;
         dirty_ram_abs += TARGET_PAGE_SIZE;
-    } while (*offset & (qemu_host_page_size - 1));
+    } while (pss->offset & (qemu_host_page_size - 1));
 
     /* The offset we leave with is the last one we looked at */
-    *offset -= TARGET_PAGE_SIZE;
+    pss->offset -= TARGET_PAGE_SIZE;
     return pages;
 }
 
@@ -1348,7 +1351,7 @@ static int ram_find_and_save_block(QEMUFile *f, bool last_stage,
         }
 
         if (found) {
-            pages = ram_save_host_page(ms, f, pss.block, &pss.offset,
+            pages = ram_save_host_page(ms, f, &pss,
                                        last_stage, bytes_transferred,
                                        dirty_ram_abs);
         }
@@ -1429,6 +1432,7 @@ static void ram_migration_cleanup(void *opaque)
         cache_fini(XBZRLE.cache);
         g_free(XBZRLE.encoded_buf);
         g_free(XBZRLE.current_buf);
+        g_free(ZERO_TARGET_PAGE);
         XBZRLE.cache = NULL;
         XBZRLE.encoded_buf = NULL;
         XBZRLE.current_buf = NULL;
@@ -1549,7 +1553,9 @@ static int postcopy_send_discard_bm_ram(MigrationState *ms,
             } else {
                 discard_length = zero - one;
             }
-            postcopy_discard_send_range(ms, pds, one, discard_length);
+            if (discard_length) {
+                postcopy_discard_send_range(ms, pds, one, discard_length);
+            }
             current = one + discard_length;
         } else {
             current = one;
@@ -1866,16 +1872,8 @@ err:
     return ret;
 }
 
-
-/* Each of ram_save_setup, ram_save_iterate and ram_save_complete has
- * long-running RCU critical section.  When rcu-reclaims in the code
- * start to become numerous it will be necessary to reduce the
- * granularity of these critical sections.
- */
-
-static int ram_save_setup(QEMUFile *f, void *opaque)
+static int ram_save_init_globals(void)
 {
-    RAMBlock *block;
     int64_t ram_bitmap_pages; /* Size of bitmap in pages, including gaps */
 
     dirty_rate_high_cnt = 0;
@@ -1885,6 +1883,7 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
 
     if (migrate_use_xbzrle()) {
         XBZRLE_cache_lock();
+        ZERO_TARGET_PAGE = g_malloc0(TARGET_PAGE_SIZE);
         XBZRLE.cache = cache_init(migrate_xbzrle_cache_size() /
                                   TARGET_PAGE_SIZE,
                                   TARGET_PAGE_SIZE);
@@ -1913,8 +1912,9 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
         acct_clear();
     }
 
-    /* iothread lock needed for ram_list.dirty_memory[] */
+    /* For memory_global_dirty_log_start below.  */
     qemu_mutex_lock_iothread();
+
     qemu_mutex_lock_ramlist();
     rcu_read_lock();
     bytes_transferred = 0;
@@ -1940,6 +1940,29 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
     migration_bitmap_sync();
     qemu_mutex_unlock_ramlist();
     qemu_mutex_unlock_iothread();
+    rcu_read_unlock();
+
+    return 0;
+}
+
+/* Each of ram_save_setup, ram_save_iterate and ram_save_complete has
+ * long-running RCU critical section.  When rcu-reclaims in the code
+ * start to become numerous it will be necessary to reduce the
+ * granularity of these critical sections.
+ */
+
+static int ram_save_setup(QEMUFile *f, void *opaque)
+{
+    RAMBlock *block;
+
+    /* migration has already setup the bitmap, reuse it. */
+    if (!migration_in_colo_state()) {
+        if (ram_save_init_globals() < 0) {
+            return -1;
+         }
+    }
+
+    rcu_read_lock();
 
     qemu_put_be64(f, ram_bytes_total() | RAM_SAVE_FLAG_MEM_SIZE);
 
@@ -1964,7 +1987,7 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
     int ret;
     int i;
     int64_t t0;
-    int pages_sent = 0;
+    int done = 0;
 
     rcu_read_lock();
     if (ram_list.version != last_version) {
@@ -1984,9 +2007,9 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
         pages = ram_find_and_save_block(f, false, &bytes_transferred);
         /* no more pages to sent */
         if (pages == 0) {
+            done = 1;
             break;
         }
-        pages_sent += pages;
         acct_info.iterations++;
 
         /* we want to check in the 1st loop, just in case it was the 1st time
@@ -2021,7 +2044,7 @@ static int ram_save_iterate(QEMUFile *f, void *opaque)
         return ret;
     }
 
-    return pages_sent;
+    return done;
 }
 
 /* Called with iothread lock */
@@ -2041,7 +2064,8 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
     while (true) {
         int pages;
 
-        pages = ram_find_and_save_block(f, true, &bytes_transferred);
+        pages = ram_find_and_save_block(f, !migration_in_colo_state(),
+                                        &bytes_transferred);
         /* no more blocks to sent */
         if (pages == 0) {
             break;
@@ -2084,10 +2108,12 @@ static int load_xbzrle(QEMUFile *f, ram_addr_t addr, void *host)
 {
     unsigned int xh_len;
     int xh_flags;
+    uint8_t *loaded_data;
 
     if (!xbzrle_decoded_buf) {
         xbzrle_decoded_buf = g_malloc(TARGET_PAGE_SIZE);
     }
+    loaded_data = xbzrle_decoded_buf;
 
     /* extract RLE header */
     xh_flags = qemu_get_byte(f);
@@ -2103,10 +2129,10 @@ static int load_xbzrle(QEMUFile *f, ram_addr_t addr, void *host)
         return -1;
     }
     /* load data and decode */
-    qemu_get_buffer(f, xbzrle_decoded_buf, xh_len);
+    qemu_get_buffer_in_place(f, &loaded_data, xh_len);
 
     /* decode RLE */
-    if (xbzrle_decode_buffer(xbzrle_decoded_buf, xh_len, host,
+    if (xbzrle_decode_buffer(loaded_data, xh_len, host,
                              TARGET_PAGE_SIZE) == -1) {
         error_report("Failed to load XBZRLE page - decode error!");
         return -1;
@@ -2119,28 +2145,24 @@ static int load_xbzrle(QEMUFile *f, ram_addr_t addr, void *host)
  * Returns a pointer from within the RCU-protected ram_list.
  */
 /*
- * Read a RAMBlock ID from the stream f, find the host address of the
- * start of that block and add on 'offset'
+ * Read a RAMBlock ID from the stream f.
  *
  * f: Stream to read from
- * offset: Offset within the block
  * flags: Page flags (mostly to see if it's a continuation of previous block)
  */
-static inline void *host_from_stream_offset(QEMUFile *f,
-                                            ram_addr_t offset,
-                                            int flags)
+static inline RAMBlock *ram_block_from_stream(QEMUFile *f,
+                                              int flags)
 {
     static RAMBlock *block = NULL;
     char id[256];
     uint8_t len;
 
     if (flags & RAM_SAVE_FLAG_CONTINUE) {
-        if (!block || block->max_length <= offset) {
+        if (!block) {
             error_report("Ack, bad migration stream!");
             return NULL;
         }
-
-        return block->host + offset;
+        return block;
     }
 
     len = qemu_get_byte(f);
@@ -2148,12 +2170,22 @@ static inline void *host_from_stream_offset(QEMUFile *f,
     id[len] = 0;
 
     block = qemu_ram_block_by_name(id);
-    if (block && block->max_length > offset) {
-        return block->host + offset;
+    if (!block) {
+        error_report("Can't find block %s", id);
+        return NULL;
     }
 
-    error_report("Can't find block %s", id);
-    return NULL;
+    return block;
+}
+
+static inline void *host_from_ram_block_offset(RAMBlock *block,
+                                               ram_addr_t offset)
+{
+    if (!offset_in_ramblock(block, offset)) {
+        return NULL;
+    }
+
+    return block->host + offset;
 }
 
 /*
@@ -2171,27 +2203,57 @@ static void *do_data_decompress(void *opaque)
 {
     DecompressParam *param = opaque;
     unsigned long pagesize;
+    uint8_t *des;
+    int len;
 
-    while (!quit_decomp_thread) {
-        qemu_mutex_lock(&param->mutex);
-        while (!param->start && !quit_decomp_thread) {
-            qemu_cond_wait(&param->cond, &param->mutex);
+    qemu_mutex_lock(&param->mutex);
+    while (!param->quit) {
+        if (param->des) {
+            des = param->des;
+            len = param->len;
+            param->des = 0;
+            qemu_mutex_unlock(&param->mutex);
+
             pagesize = TARGET_PAGE_SIZE;
-            if (!quit_decomp_thread) {
-                /* uncompress() will return failed in some case, especially
-                 * when the page is dirted when doing the compression, it's
-                 * not a problem because the dirty page will be retransferred
-                 * and uncompress() won't break the data in other pages.
-                 */
-                uncompress((Bytef *)param->des, &pagesize,
-                           (const Bytef *)param->compbuf, param->len);
-            }
-            param->start = false;
+            /* uncompress() will return failed in some case, especially
+             * when the page is dirted when doing the compression, it's
+             * not a problem because the dirty page will be retransferred
+             * and uncompress() won't break the data in other pages.
+             */
+            uncompress((Bytef *)des, &pagesize,
+                       (const Bytef *)param->compbuf, len);
+
+            qemu_mutex_lock(&decomp_done_lock);
+            param->done = true;
+            qemu_cond_signal(&decomp_done_cond);
+            qemu_mutex_unlock(&decomp_done_lock);
+
+            qemu_mutex_lock(&param->mutex);
+        } else {
+            qemu_cond_wait(&param->cond, &param->mutex);
         }
-        qemu_mutex_unlock(&param->mutex);
     }
+    qemu_mutex_unlock(&param->mutex);
 
     return NULL;
+}
+
+static void wait_for_decompress_done(void)
+{
+    int idx, thread_count;
+
+    if (!migrate_use_compression()) {
+        return;
+    }
+
+    thread_count = migrate_decompress_threads();
+    qemu_mutex_lock(&decomp_done_lock);
+    for (idx = 0; idx < thread_count; idx++) {
+        while (!decomp_param[idx].done) {
+            qemu_cond_wait(&decomp_done_cond, &decomp_done_lock);
+        }
+    }
+    qemu_mutex_unlock(&decomp_done_lock);
 }
 
 void migrate_decompress_threads_create(void)
@@ -2201,12 +2263,14 @@ void migrate_decompress_threads_create(void)
     thread_count = migrate_decompress_threads();
     decompress_threads = g_new0(QemuThread, thread_count);
     decomp_param = g_new0(DecompressParam, thread_count);
-    compressed_data_buf = g_malloc0(compressBound(TARGET_PAGE_SIZE));
-    quit_decomp_thread = false;
+    qemu_mutex_init(&decomp_done_lock);
+    qemu_cond_init(&decomp_done_cond);
     for (i = 0; i < thread_count; i++) {
         qemu_mutex_init(&decomp_param[i].mutex);
         qemu_cond_init(&decomp_param[i].cond);
         decomp_param[i].compbuf = g_malloc0(compressBound(TARGET_PAGE_SIZE));
+        decomp_param[i].done = true;
+        decomp_param[i].quit = false;
         qemu_thread_create(decompress_threads + i, "decompress",
                            do_data_decompress, decomp_param + i,
                            QEMU_THREAD_JOINABLE);
@@ -2217,10 +2281,10 @@ void migrate_decompress_threads_join(void)
 {
     int i, thread_count;
 
-    quit_decomp_thread = true;
     thread_count = migrate_decompress_threads();
     for (i = 0; i < thread_count; i++) {
         qemu_mutex_lock(&decomp_param[i].mutex);
+        decomp_param[i].quit = true;
         qemu_cond_signal(&decomp_param[i].cond);
         qemu_mutex_unlock(&decomp_param[i].mutex);
     }
@@ -2232,32 +2296,37 @@ void migrate_decompress_threads_join(void)
     }
     g_free(decompress_threads);
     g_free(decomp_param);
-    g_free(compressed_data_buf);
     decompress_threads = NULL;
     decomp_param = NULL;
-    compressed_data_buf = NULL;
 }
 
-static void decompress_data_with_multi_threads(uint8_t *compbuf,
+static void decompress_data_with_multi_threads(QEMUFile *f,
                                                void *host, int len)
 {
     int idx, thread_count;
 
     thread_count = migrate_decompress_threads();
+    qemu_mutex_lock(&decomp_done_lock);
     while (true) {
         for (idx = 0; idx < thread_count; idx++) {
-            if (!decomp_param[idx].start) {
-                memcpy(decomp_param[idx].compbuf, compbuf, len);
+            if (decomp_param[idx].done) {
+                decomp_param[idx].done = false;
+                qemu_mutex_lock(&decomp_param[idx].mutex);
+                qemu_get_buffer(f, decomp_param[idx].compbuf, len);
                 decomp_param[idx].des = host;
                 decomp_param[idx].len = len;
-                start_decompression(&decomp_param[idx]);
+                qemu_cond_signal(&decomp_param[idx].cond);
+                qemu_mutex_unlock(&decomp_param[idx].mutex);
                 break;
             }
         }
         if (idx < thread_count) {
             break;
+        } else {
+            qemu_cond_wait(&decomp_done_cond, &decomp_done_lock);
         }
     }
+    qemu_mutex_unlock(&decomp_done_lock);
 }
 
 /*
@@ -2300,13 +2369,14 @@ static int ram_load_postcopy(QEMUFile *f)
         trace_ram_load_postcopy_loop((uint64_t)addr, flags);
         place_needed = false;
         if (flags & (RAM_SAVE_FLAG_COMPRESS | RAM_SAVE_FLAG_PAGE)) {
-            host = host_from_stream_offset(f, addr, flags);
+            RAMBlock *block = ram_block_from_stream(f, flags);
+
+            host = host_from_ram_block_offset(block, addr);
             if (!host) {
                 error_report("Illegal RAM offset " RAM_ADDR_FMT, addr);
                 ret = -EINVAL;
                 break;
             }
-            page_buffer = host;
             /*
              * Postcopy requires that we place whole host pages atomically.
              * To make it atomic, the data is read into a temporary page
@@ -2323,7 +2393,7 @@ static int ram_load_postcopy(QEMUFile *f)
             } else {
                 /* not the 1st TP within the HP */
                 if (host != (last_host + TARGET_PAGE_SIZE)) {
-                    error_report("Non-sequential target page %p/%p\n",
+                    error_report("Non-sequential target page %p/%p",
                                   host, last_host);
                     ret = -EINVAL;
                     break;
@@ -2431,7 +2501,9 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
 
         if (flags & (RAM_SAVE_FLAG_COMPRESS | RAM_SAVE_FLAG_PAGE |
                      RAM_SAVE_FLAG_COMPRESS_PAGE | RAM_SAVE_FLAG_XBZRLE)) {
-            host = host_from_stream_offset(f, addr, flags);
+            RAMBlock *block = ram_block_from_stream(f, flags);
+
+            host = host_from_ram_block_offset(block, addr);
             if (!host) {
                 error_report("Illegal RAM offset " RAM_ADDR_FMT, addr);
                 ret = -EINVAL;
@@ -2458,7 +2530,7 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
                     if (length != block->used_length) {
                         Error *local_err = NULL;
 
-                        ret = qemu_ram_resize(block->offset, length,
+                        ret = qemu_ram_resize(block, length,
                                               &local_err);
                         if (local_err) {
                             error_report_err(local_err);
@@ -2492,8 +2564,7 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
                 ret = -EINVAL;
                 break;
             }
-            qemu_get_buffer(f, compressed_data_buf, len);
-            decompress_data_with_multi_threads(compressed_data_buf, host, len);
+            decompress_data_with_multi_threads(f, host, len);
             break;
 
         case RAM_SAVE_FLAG_XBZRLE:
@@ -2521,6 +2592,7 @@ static int ram_load(QEMUFile *f, void *opaque, int version_id)
         }
     }
 
+    wait_for_decompress_done();
     rcu_read_unlock();
     DPRINTF("Completed load of VM with exit code %d seq iteration "
             "%" PRIu64 "\n", ret, seq_iter);

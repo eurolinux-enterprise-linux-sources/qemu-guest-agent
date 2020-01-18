@@ -10,16 +10,12 @@
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include <glib.h>
+#include "qemu/osdep.h"
 #include <getopt.h>
 #include <glib/gstdio.h>
 #ifndef _WIN32
 #include <syslog.h>
 #include <sys/wait.h>
-#include <sys/stat.h>
 #endif
 #include "qapi/qmp/json-streamer.h"
 #include "qapi/qmp/json-parser.h"
@@ -27,11 +23,11 @@
 #include "qapi/qmp/qjson.h"
 #include "qga/guest-agent-core.h"
 #include "qemu/module.h"
-#include "signal.h"
 #include "qapi/qmp/qerror.h"
 #include "qapi/qmp/dispatch.h"
 #include "qga/channel.h"
 #include "qemu/bswap.h"
+#include "qemu/help_option.h"
 #ifdef _WIN32
 #include "qga/service-win32.h"
 #include "qga/vss-win32.h"
@@ -194,8 +190,8 @@ static void usage(const char *cmd)
 "Usage: %s [-m <method> -p <path>] [<options>]\n"
 "QEMU Guest Agent %s\n"
 "\n"
-"  -m, --method      transport method: one of unix-listen, virtio-serial, or\n"
-"                    isa-serial (virtio-serial is the default)\n"
+"  -m, --method      transport method: one of unix-listen, virtio-serial,\n"
+"                    isa-serial, or vsock-listen (virtio-serial is the default)\n"
 "  -p, --path        device/socket path (the default for virtio-serial is:\n"
 "                    %s,\n"
 "                    the default for isa-serial is:\n"
@@ -621,13 +617,7 @@ static gboolean channel_event_cb(GIOCondition condition, gpointer data)
     GAState *s = data;
     gchar buf[QGA_READ_COUNT_DEFAULT+1];
     gsize count;
-    GError *err = NULL;
     GIOStatus status = ga_channel_read(s->channel, buf, QGA_READ_COUNT_DEFAULT, &count);
-    if (err != NULL) {
-        g_warning("error reading channel: %s", err->message);
-        g_error_free(err);
-        return false;
-    }
     switch (status) {
     case G_IO_STATUS_ERROR:
         g_warning("error reading channel");
@@ -669,6 +659,8 @@ static gboolean channel_init(GAState *s, const gchar *method, const gchar *path)
         channel_method = GA_CHANNEL_ISA_SERIAL;
     } else if (strcmp(method, "unix-listen") == 0) {
         channel_method = GA_CHANNEL_UNIX_LISTEN;
+    } else if (strcmp(method, "vsock-listen") == 0) {
+        channel_method = GA_CHANNEL_VSOCK_LISTEN;
     } else {
         g_critical("unsupported channel method/type: %s", method);
         return false;
@@ -1185,6 +1177,7 @@ static void config_free(GAConfig *config)
 #ifdef CONFIG_FSFREEZE
     g_free(config->fsfreeze_hook);
 #endif
+    g_list_free_full(config->blacklist, g_free);
     g_free(config);
 }
 
@@ -1320,11 +1313,6 @@ static int run_agent(GAState *s, GAConfig *config)
     return EXIT_SUCCESS;
 }
 
-static void free_blacklist_entry(gpointer entry, gpointer unused)
-{
-    g_free(entry);
-}
-
 int main(int argc, char **argv)
 {
     int ret = EXIT_SUCCESS;
@@ -1385,11 +1373,12 @@ int main(int argc, char **argv)
 end:
     if (s->command_state) {
         ga_command_state_cleanup_all(s->command_state);
+        ga_command_state_free(s->command_state);
+        json_message_parser_destroy(&s->parser);
     }
     if (s->channel) {
         ga_channel_free(s->channel);
     }
-    g_list_foreach(config->blacklist, free_blacklist_entry, NULL);
     g_free(s->pstate_filepath);
     g_free(s->state_filepath_isfrozen);
 
@@ -1398,6 +1387,10 @@ end:
     }
 
     config_free(config);
+    if (s->main_loop) {
+        g_main_loop_unref(s->main_loop);
+    }
+    g_free(s);
 
     return ret;
 }

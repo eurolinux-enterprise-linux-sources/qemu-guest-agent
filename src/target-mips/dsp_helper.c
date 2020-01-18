@@ -17,6 +17,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
 #include "qemu/bitops.h"
@@ -3476,7 +3477,7 @@ target_ulong helper_dextp(target_ulong ac, target_ulong size, CPUMIPSState *env)
 
     if (sub >= -1) {
         temp = (tempB << (64 - len)) | (tempA >> len);
-        temp = temp & ((0x01 << (size + 1)) - 1);
+        temp = temp & ((1ULL << (size + 1)) - 1);
         set_DSPControl_efi(0, env);
     } else {
         set_DSPControl_efi(1, env);
@@ -3505,7 +3506,7 @@ target_ulong helper_dextpdp(target_ulong ac, target_ulong size,
 
     if (sub >= -1) {
         temp = (tempB << (64 - len)) | (tempA >> len);
-        temp = temp & ((0x01 << (size + 1)) - 1);
+        temp = temp & ((1ULL << (size + 1)) - 1);
         set_DSPControl_pos(sub, env);
         set_DSPControl_efi(0, env);
     } else {

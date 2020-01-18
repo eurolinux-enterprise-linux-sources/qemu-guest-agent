@@ -17,6 +17,7 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "qemu/osdep.h"
 #include "sysemu/char.h"
 #include "hw/hw.h"
 #include "hw/arm/omap.h"
@@ -62,7 +63,7 @@ struct omap_uart_s *omap_uart_init(hwaddr base,
     s->irq = irq;
     s->serial = serial_mm_init(get_system_memory(), base, 2, irq,
                                omap_clk_getrate(fclk)/16,
-                               chr ?: qemu_chr_new(label, "null", NULL),
+                               chr ?: qemu_chr_new(label, "null"),
                                DEVICE_NATIVE_ENDIAN);
     return s;
 }
@@ -182,6 +183,6 @@ void omap_uart_attach(struct omap_uart_s *s, CharDriverState *chr)
     /* TODO: Should reuse or destroy current s->serial */
     s->serial = serial_mm_init(get_system_memory(), s->base, 2, s->irq,
                                omap_clk_getrate(s->fclk) / 16,
-                               chr ?: qemu_chr_new("null", "null", NULL),
+                               chr ?: qemu_chr_new("null", "null"),
                                DEVICE_NATIVE_ENDIAN);
 }

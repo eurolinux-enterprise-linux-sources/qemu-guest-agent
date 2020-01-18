@@ -1,5 +1,5 @@
 /*
- * JSON Parser 
+ * JSON Parser
  *
  * Copyright IBM, Corp. 2009
  *
@@ -11,15 +11,10 @@
  *
  */
 
-#include <stdarg.h>
-
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "qemu-common.h"
-#include "qapi/qmp/qstring.h"
-#include "qapi/qmp/qint.h"
-#include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qlist.h"
-#include "qapi/qmp/qfloat.h"
-#include "qapi/qmp/qbool.h"
+#include "qapi/qmp/types.h"
 #include "qapi/qmp/json-parser.h"
 #include "qapi/qmp/json-lexer.h"
 #include "qapi/qmp/json-streamer.h"
@@ -518,7 +513,9 @@ static QObject *parse_literal(JSONParserContext *ctxt)
         /* fall through to JSON_FLOAT */
     }
     case JSON_FLOAT:
-        /* FIXME dependent on locale */
+        /* FIXME dependent on locale; a pervasive issue in QEMU */
+        /* FIXME our lexer matches RFC 7159 in forbidding Inf or NaN,
+         * but those might be useful extensions beyond JSON */
         return QOBJECT(qfloat_from_double(strtod(token->str, NULL)));
     default:
         abort();

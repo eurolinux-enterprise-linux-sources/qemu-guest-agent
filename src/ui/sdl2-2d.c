@@ -23,6 +23,7 @@
  */
 /* Ported SDL 1.2 code to 2.0 by Dave Airlie. */
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "ui/console.h"
 #include "ui/input.h"
@@ -114,6 +115,9 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
         break;
     case PIXMAN_r8g8b8x8:
         format = SDL_PIXELFORMAT_RGBA8888;
+        break;
+    case PIXMAN_b8g8r8x8:
+        format = SDL_PIXELFORMAT_BGRX8888;
         break;
     default:
         g_assert_not_reached();

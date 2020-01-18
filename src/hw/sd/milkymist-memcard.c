@@ -18,9 +18,10 @@
  *
  *
  * Specification available at:
- *   http://www.milkymist.org/socdoc/memcard.pdf
+ *   http://milkymist.walle.cc/socdoc/memcard.pdf
  */
 
+#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"

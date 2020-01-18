@@ -6,8 +6,8 @@
  *
  */
 
-#ifndef __KVM_PPC_H__
-#define __KVM_PPC_H__
+#ifndef KVM_PPC_H
+#define KVM_PPC_H
 
 #define TYPE_HOST_POWERPC_CPU "host-" TYPE_POWERPC_CPU
 
@@ -24,6 +24,7 @@ int kvmppc_get_hypercall(CPUPPCState *env, uint8_t *buf, int buf_len);
 int kvmppc_set_interrupt(PowerPCCPU *cpu, int irq, int level);
 void kvmppc_enable_logical_ci_hcalls(void);
 void kvmppc_enable_set_mode_hcall(void);
+void kvmppc_enable_clear_ref_mod_hcalls(void);
 void kvmppc_set_papr(PowerPCCPU *cpu);
 int kvmppc_set_compat(PowerPCCPU *cpu, uint32_t cpu_version);
 void kvmppc_set_mpic_proxy(PowerPCCPU *cpu, int mpic_proxy);
@@ -54,7 +55,10 @@ void kvmppc_hash64_free_pteg(uint64_t token);
 void kvmppc_hash64_write_pte(CPUPPCState *env, target_ulong pte_index,
                              target_ulong pte0, target_ulong pte1);
 bool kvmppc_has_cap_fixup_hcalls(void);
+bool kvmppc_has_cap_htm(void);
 int kvmppc_enable_hwrng(void);
+int kvmppc_put_books_sregs(PowerPCCPU *cpu);
+PowerPCCPUClass *kvm_ppc_get_host_cpu_class(void);
 
 #else
 
@@ -98,11 +102,6 @@ static inline int kvmppc_get_hypercall(CPUPPCState *env, uint8_t *buf, int buf_l
     return -1;
 }
 
-static inline int kvmppc_read_segment_page_sizes(uint32_t *prop, int maxcells)
-{
-    return -1;
-}
-
 static inline int kvmppc_set_interrupt(PowerPCCPU *cpu, int irq, int level)
 {
     return -1;
@@ -113,6 +112,10 @@ static inline void kvmppc_enable_logical_ci_hcalls(void)
 }
 
 static inline void kvmppc_enable_set_mode_hcall(void)
+{
+}
+
+static inline void kvmppc_enable_clear_ref_mod_hcalls(void)
 {
 }
 
@@ -167,7 +170,7 @@ static inline bool kvmppc_spapr_use_multitce(void)
 
 static inline void *kvmppc_create_spapr_tce(uint32_t liobn,
                                             uint32_t window_size, int *fd,
-                                            bool vfio_accel)
+                                            bool need_vfio)
 {
     return NULL;
 }
@@ -187,11 +190,6 @@ static inline uint64_t kvmppc_rma_size(uint64_t current_size,
                                        unsigned int hash_shift)
 {
     return ram_size;
-}
-
-static inline int kvmppc_update_sdr1(CPUPPCState *env)
-{
-    return 0;
 }
 
 #endif /* !CONFIG_USER_ONLY */
@@ -252,22 +250,70 @@ static inline bool kvmppc_has_cap_fixup_hcalls(void)
     abort();
 }
 
+static inline bool kvmppc_has_cap_htm(void)
+{
+    return false;
+}
+
 static inline int kvmppc_enable_hwrng(void)
 {
     return -1;
 }
+
+static inline int kvmppc_put_books_sregs(PowerPCCPU *cpu)
+{
+    abort();
+}
+
+static inline PowerPCCPUClass *kvm_ppc_get_host_cpu_class(void)
+{
+    return NULL;
+}
+
 #endif
 
 #ifndef CONFIG_KVM
+
 #define kvmppc_eieio() do { } while (0)
-#else
+
+static inline void kvmppc_dcbst_range(PowerPCCPU *cpu, uint8_t *addr, int len)
+{
+}
+
+static inline void kvmppc_icbi_range(PowerPCCPU *cpu, uint8_t *addr, int len)
+{
+}
+
+#else   /* CONFIG_KVM */
+
 #define kvmppc_eieio() \
     do {                                          \
         if (kvm_enabled()) {                          \
             asm volatile("eieio" : : : "memory"); \
         } \
     } while (0)
-#endif
+
+/* Store data cache blocks back to memory */
+static inline void kvmppc_dcbst_range(PowerPCCPU *cpu, uint8_t *addr, int len)
+{
+    uint8_t *p;
+
+    for (p = addr; p < addr + len; p += cpu->env.dcache_line_size) {
+        asm volatile("dcbst 0,%0" : : "r"(p) : "memory");
+    }
+}
+
+/* Invalidate instruction cache blocks */
+static inline void kvmppc_icbi_range(PowerPCCPU *cpu, uint8_t *addr, int len)
+{
+    uint8_t *p;
+
+    for (p = addr; p < addr + len; p += cpu->env.icache_line_size) {
+        asm volatile("icbi 0,%0" : : "r"(p));
+    }
+}
+
+#endif  /* CONFIG_KVM */
 
 #ifndef KVM_INTERRUPT_SET
 #define KVM_INTERRUPT_SET -1
@@ -281,4 +327,4 @@ static inline int kvmppc_enable_hwrng(void)
 #define KVM_INTERRUPT_SET_LEVEL -3
 #endif
 
-#endif /* __KVM_PPC_H__ */
+#endif /* KVM_PPC_H */

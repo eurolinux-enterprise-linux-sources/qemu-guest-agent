@@ -12,11 +12,7 @@
 #ifndef BITMAP_H
 #define BITMAP_H
 
-#include <glib.h>
-#include <string.h>
-#include <stdlib.h>
 
-#include "qemu/osdep.h"
 #include "qemu/bitops.h"
 
 /*
@@ -61,11 +57,8 @@
  * find_next_bit(addr, nbits, bit)	Position next set bit in *addr >= bit
  */
 
-#define BITMAP_LAST_WORD_MASK(nbits)                                    \
-    (                                                                   \
-        ((nbits) % BITS_PER_LONG) ?                                     \
-        (1UL<<((nbits) % BITS_PER_LONG))-1 : ~0UL                       \
-        )
+#define BITMAP_FIRST_WORD_MASK(start) (~0UL << ((start) & (BITS_PER_LONG - 1)))
+#define BITMAP_LAST_WORD_MASK(nbits) (~0UL >> (-(nbits) & (BITS_PER_LONG - 1)))
 
 #define DECLARE_BITMAP(name,bits)                  \
         unsigned long name[BITS_TO_LONGS(bits)]
@@ -79,10 +72,6 @@ int slow_bitmap_equal(const unsigned long *bitmap1,
                       const unsigned long *bitmap2, long bits);
 void slow_bitmap_complement(unsigned long *dst, const unsigned long *src,
                             long bits);
-void slow_bitmap_shift_right(unsigned long *dst,
-                             const unsigned long *src, int shift, long bits);
-void slow_bitmap_shift_left(unsigned long *dst,
-                            const unsigned long *src, int shift, long bits);
 int slow_bitmap_and(unsigned long *dst, const unsigned long *bitmap1,
                     const unsigned long *bitmap2, long bits);
 void slow_bitmap_or(unsigned long *dst, const unsigned long *bitmap1,

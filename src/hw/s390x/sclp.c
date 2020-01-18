@@ -12,6 +12,8 @@
  *
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "sysemu/kvm.h"
 #include "exec/memory.h"
@@ -24,7 +26,25 @@
 
 static inline SCLPDevice *get_sclp_device(void)
 {
-    return SCLP(object_resolve_path_type("", TYPE_SCLP, NULL));
+    static SCLPDevice *sclp;
+
+    if (!sclp) {
+        sclp = SCLP(object_resolve_path_type("", TYPE_SCLP, NULL));
+    }
+    return sclp;
+}
+
+static void prepare_cpu_entries(SCLPDevice *sclp, CPUEntry *entry, int count)
+{
+    uint8_t features[SCCB_CPU_FEATURE_LEN] = { 0 };
+    int i;
+
+    s390_get_feat_block(S390_FEAT_TYPE_SCLP_CPU, features);
+    for (i = 0; i < count; i++) {
+        entry[i].address = i;
+        entry[i].type = 0;
+        memcpy(entry[i].features, features, sizeof(entry[i].features));
+    }
 }
 
 /* Provide information about the configuration, CPUs and storage */
@@ -35,7 +55,6 @@ static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
     sclpMemoryHotplugDev *mhd = get_sclp_memory_hotplug_dev();
     CPUState *cpu;
     int cpu_count = 0;
-    int i = 0;
     int rnsize, rnmax;
     int slots = MIN(machine->ram_slots, s390_get_memslot_count(kvm_state));
 
@@ -48,10 +67,15 @@ static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
     read_info->offset_cpu = cpu_to_be16(offsetof(ReadInfo, entries));
     read_info->highest_cpu = cpu_to_be16(max_cpus);
 
-    for (i = 0; i < cpu_count; i++) {
-        read_info->entries[i].address = i;
-        read_info->entries[i].type = 0;
-    }
+    read_info->ibc_val = cpu_to_be32(s390_get_ibc_val());
+
+    /* Configuration Characteristic (Extension) */
+    s390_get_feat_block(S390_FEAT_TYPE_SCLP_CONF_CHAR,
+                         read_info->conf_char);
+    s390_get_feat_block(S390_FEAT_TYPE_SCLP_CONF_CHAR_EXT,
+                         read_info->conf_char_ext);
+
+    prepare_cpu_entries(sclp, read_info->entries, cpu_count);
 
     read_info->facilities = cpu_to_be64(SCLP_HAS_CPU_INFO |
                                         SCLP_HAS_PCI_RECONFIG);
@@ -86,6 +110,8 @@ static void read_SCP_info(SCLPDevice *sclp, SCCB *sccb)
 
         read_info->facilities |= cpu_to_be64(SCLP_FC_ASSIGN_ATTACH_READ_STOR);
     }
+    read_info->mha_pow = s390_get_mha_pow();
+    read_info->hmfai = cpu_to_be32(s390_get_hmfai());
 
     rnsize = 1 << (sclp->increment_size - 20);
     if (rnsize <= 128) {
@@ -302,7 +328,6 @@ static void sclp_read_cpu_info(SCLPDevice *sclp, SCCB *sccb)
     ReadCpuInfo *cpu_info = (ReadCpuInfo *) sccb;
     CPUState *cpu;
     int cpu_count = 0;
-    int i = 0;
 
     CPU_FOREACH(cpu) {
         cpu_count++;
@@ -316,10 +341,7 @@ static void sclp_read_cpu_info(SCLPDevice *sclp, SCCB *sccb)
     cpu_info->offset_standby = cpu_to_be16(cpu_info->offset_configured
         + cpu_info->nr_configured*sizeof(CPUEntry));
 
-    for (i = 0; i < cpu_count; i++) {
-        cpu_info->entries[i].address = i;
-        cpu_info->entries[i].type = 0;
-    }
+    prepare_cpu_entries(sclp, cpu_info->entries, cpu_count);
 
     sccb->h.response_code = cpu_to_be16(SCLP_RC_NORMAL_READ_COMPLETION);
 }
@@ -355,10 +377,10 @@ static void sclp_execute(SCLPDevice *sclp, SCCB *sccb, uint32_t code)
         sclp_c->unassign_storage(sclp, sccb);
         break;
     case SCLP_CMDW_CONFIGURE_PCI:
-        s390_pci_sclp_configure(1, sccb);
+        s390_pci_sclp_configure(sccb);
         break;
     case SCLP_CMDW_DECONFIGURE_PCI:
-        s390_pci_sclp_configure(0, sccb);
+        s390_pci_sclp_deconfigure(sccb);
         break;
     default:
         efc->command_handler(ef, sccb, code);
@@ -404,7 +426,7 @@ int sclp_service_call(CPUS390XState *env, uint64_t sccb, uint32_t code)
         goto out;
     }
 
-    sclp_c->execute(sclp, (SCCB *)&work_sccb, code);
+    sclp_c->execute(sclp, &work_sccb, code);
 
     cpu_physical_memory_write(sccb, &work_sccb,
                               be16_to_cpu(work_sccb.h.length));
@@ -456,29 +478,32 @@ static void sclp_realize(DeviceState *dev, Error **errp)
 {
     MachineState *machine = MACHINE(qdev_get_machine());
     SCLPDevice *sclp = SCLP(dev);
-    Error *l_err = NULL;
+    Error *err = NULL;
     uint64_t hw_limit;
     int ret;
 
     object_property_set_bool(OBJECT(sclp->event_facility), true, "realized",
-                             &l_err);
-    if (l_err) {
-        goto error;
+                             &err);
+    if (err) {
+        goto out;
     }
+    /*
+     * qdev_device_add searches the sysbus for TYPE_SCLP_EVENTS_BUS. As long
+     * as we can't find a fitting bus via the qom tree, we have to add the
+     * event facility to the sysbus, so e.g. a sclp console can be created.
+     */
+    qdev_set_parent_bus(DEVICE(sclp->event_facility), sysbus_get_default());
 
     ret = s390_set_memory_limit(machine->maxram_size, &hw_limit);
     if (ret == -E2BIG) {
-        error_setg(&l_err, "qemu: host supports a maximum of %" PRIu64 " GB",
+        error_setg(&err, "qemu: host supports a maximum of %" PRIu64 " GB",
                    hw_limit >> 30);
-        goto error;
     } else if (ret) {
-        error_setg(&l_err, "qemu: setting the guest size failed");
-        goto error;
+        error_setg(&err, "qemu: setting the guest size failed");
     }
-    return;
-error:
-    assert(l_err);
-    error_propagate(errp, l_err);
+
+out:
+    error_propagate(errp, err);
 }
 
 static void sclp_memory_init(SCLPDevice *sclp)
@@ -536,8 +561,6 @@ static void sclp_init(Object *obj)
 
     new = object_new(TYPE_SCLP_EVENT_FACILITY);
     object_property_add_child(obj, TYPE_SCLP_EVENT_FACILITY, new, NULL);
-    /* qdev_device_add searches the sysbus for TYPE_SCLP_EVENTS_BUS */
-    qdev_set_parent_bus(DEVICE(new), sysbus_get_default());
     object_unref(new);
     sclp->event_facility = EVENT_FACILITY(new);
 

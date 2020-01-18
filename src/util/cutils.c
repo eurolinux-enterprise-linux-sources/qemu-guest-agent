@@ -21,15 +21,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/host-utils.h"
 #include <math.h>
-#include <limits.h>
-#include <errno.h>
 
 #include "qemu/sockets.h"
 #include "qemu/iov.h"
 #include "net/net.h"
+#include "qemu/cutils.h"
 
 void strpadcpy(char *buf, int buf_size, const char *str, char pad)
 {
@@ -159,101 +159,6 @@ int qemu_fdatasync(int fd)
 #else
     return fsync(fd);
 #endif
-}
-
-/*
- * Searches for an area with non-zero content in a buffer
- *
- * Attention! The len must be a multiple of
- * BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR * sizeof(VECTYPE)
- * and addr must be a multiple of sizeof(VECTYPE) due to
- * restriction of optimizations in this function.
- *
- * can_use_buffer_find_nonzero_offset() can be used to check
- * these requirements.
- *
- * The return value is the offset of the non-zero area rounded
- * down to a multiple of sizeof(VECTYPE) for the first
- * BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR chunks and down to
- * BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR * sizeof(VECTYPE)
- * afterwards.
- *
- * If the buffer is all zero the return value is equal to len.
- */
-
-size_t buffer_find_nonzero_offset(const void *buf, size_t len)
-{
-    const VECTYPE *p = buf;
-    const VECTYPE zero = (VECTYPE){0};
-    size_t i;
-
-    assert(can_use_buffer_find_nonzero_offset(buf, len));
-
-    if (!len) {
-        return 0;
-    }
-
-    for (i = 0; i < BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR; i++) {
-        if (!ALL_EQ(p[i], zero)) {
-            return i * sizeof(VECTYPE);
-        }
-    }
-
-    for (i = BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR;
-         i < len / sizeof(VECTYPE);
-         i += BUFFER_FIND_NONZERO_OFFSET_UNROLL_FACTOR) {
-        VECTYPE tmp0 = VEC_OR(p[i + 0], p[i + 1]);
-        VECTYPE tmp1 = VEC_OR(p[i + 2], p[i + 3]);
-        VECTYPE tmp2 = VEC_OR(p[i + 4], p[i + 5]);
-        VECTYPE tmp3 = VEC_OR(p[i + 6], p[i + 7]);
-        VECTYPE tmp01 = VEC_OR(tmp0, tmp1);
-        VECTYPE tmp23 = VEC_OR(tmp2, tmp3);
-        if (!ALL_EQ(VEC_OR(tmp01, tmp23), zero)) {
-            break;
-        }
-    }
-
-    return i * sizeof(VECTYPE);
-}
-
-/*
- * Checks if a buffer is all zeroes
- *
- * Attention! The len must be a multiple of 4 * sizeof(long) due to
- * restriction of optimizations in this function.
- */
-bool buffer_is_zero(const void *buf, size_t len)
-{
-    /*
-     * Use long as the biggest available internal data type that fits into the
-     * CPU register and unroll the loop to smooth out the effect of memory
-     * latency.
-     */
-
-    size_t i;
-    long d0, d1, d2, d3;
-    const long * const data = buf;
-
-    /* use vector optimized zero check if possible */
-    if (can_use_buffer_find_nonzero_offset(buf, len)) {
-        return buffer_find_nonzero_offset(buf, len) == len;
-    }
-
-    assert(len % (4 * sizeof(long)) == 0);
-    len /= sizeof(long);
-
-    for (i = 0; i < len; i += 4) {
-        d0 = data[i + 0];
-        d1 = data[i + 1];
-        d2 = data[i + 2];
-        d3 = data[i + 3];
-
-        if (d0 || d1 || d2 || d3) {
-            return false;
-        }
-    }
-
-    return true;
 }
 
 #ifndef _WIN32

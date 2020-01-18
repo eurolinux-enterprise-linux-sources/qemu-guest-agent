@@ -17,10 +17,9 @@
  *  with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "libqtest.h"
 #include "libqos/i2c.h"
-
-#include <glib.h>
 
 #define IMX25_I2C_0_BASE 0x43F80000
 

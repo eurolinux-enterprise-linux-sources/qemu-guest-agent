@@ -13,6 +13,8 @@
 
 #include "sysemu/kvm.h"
 
+#define kvm_apic_in_kernel() (kvm_irqchip_in_kernel())
+
 bool kvm_allows_irq0_override(void);
 bool kvm_has_smm(void);
 void kvm_synchronize_all_tsc(void);
@@ -39,4 +41,8 @@ int kvm_device_msix_set_vector(KVMState *s, uint32_t dev_id, uint32_t vector,
 int kvm_device_msix_assign(KVMState *s, uint32_t dev_id);
 int kvm_device_msix_deassign(KVMState *s, uint32_t dev_id);
 
+void kvm_put_apicbase(X86CPU *cpu, uint64_t value);
+
+bool kvm_enable_x2apic(void);
+bool kvm_has_x2apic_api(void);
 #endif

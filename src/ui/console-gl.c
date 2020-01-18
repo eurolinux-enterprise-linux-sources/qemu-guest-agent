@@ -24,6 +24,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "ui/console.h"
 #include "ui/shader.h"
@@ -85,6 +86,11 @@ void surface_gl_create_texture(ConsoleGLState *gls,
     case PIXMAN_BE_b8g8r8x8:
     case PIXMAN_BE_b8g8r8a8:
         surface->glformat = GL_BGRA_EXT;
+        surface->gltype = GL_UNSIGNED_BYTE;
+        break;
+    case PIXMAN_BE_x8r8g8b8:
+    case PIXMAN_BE_a8r8g8b8:
+        surface->glformat = GL_RGBA;
         surface->gltype = GL_UNSIGNED_BYTE;
         break;
     case PIXMAN_r5g6b5:

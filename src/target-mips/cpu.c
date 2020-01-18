@@ -18,10 +18,13 @@
  * <http://www.gnu.org/licenses/lgpl-2.1.html>
  */
 
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "cpu.h"
 #include "kvm_mips.h"
 #include "qemu-common.h"
 #include "sysemu/kvm.h"
+#include "exec/exec-all.h"
 
 
 static void mips_cpu_set_pc(CPUState *cs, vaddr value)
@@ -76,6 +79,15 @@ static bool mips_cpu_has_work(CPUState *cs)
             has_work = false;
         }
     }
+    /* MIPS Release 6 has the ability to halt the CPU.  */
+    if (env->CP0_Config5 & (1 << CP0C5_VP)) {
+        if (cs->interrupt_request & CPU_INTERRUPT_WAKE) {
+            has_work = true;
+        }
+        if (!mips_vp_active(env)) {
+            has_work = false;
+        }
+    }
     return has_work;
 }
 
@@ -112,6 +124,13 @@ static void mips_cpu_realizefn(DeviceState *dev, Error **errp)
 {
     CPUState *cs = CPU(dev);
     MIPSCPUClass *mcc = MIPS_CPU_GET_CLASS(dev);
+    Error *local_err = NULL;
+
+    cpu_exec_realizefn(cs, &local_err);
+    if (local_err != NULL) {
+        error_propagate(errp, local_err);
+        return;
+    }
 
     cpu_reset(cs);
     qemu_init_vcpu(cs);
@@ -126,7 +145,6 @@ static void mips_cpu_initfn(Object *obj)
     CPUMIPSState *env = &cpu->env;
 
     cs->env_ptr = env;
-    cpu_exec_init(cs, &error_abort);
 
     if (tcg_enabled()) {
         mips_tcg_init();
@@ -165,13 +183,6 @@ static void mips_cpu_class_init(ObjectClass *c, void *data)
 
     cc->gdb_num_core_regs = 73;
     cc->gdb_stop_before_watchpoint = true;
-
-    /*
-     * Reason: mips_cpu_initfn() calls cpu_exec_init(), which saves
-     * the object in cpus -> dangling pointer after final
-     * object_unref().
-     */
-    dc->cannot_destroy_with_object_finalize_yet = true;
 }
 
 static const TypeInfo mips_cpu_type_info = {

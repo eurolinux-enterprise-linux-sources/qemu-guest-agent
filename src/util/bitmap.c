@@ -9,6 +9,7 @@
  * Version 2.
  */
 
+#include "qemu/osdep.h"
 #include "qemu/bitops.h"
 #include "qemu/bitmap.h"
 #include "qemu/atomic.h"
@@ -155,8 +156,6 @@ int slow_bitmap_andnot(unsigned long *dst, const unsigned long *bitmap1,
     }
     return result != 0;
 }
-
-#define BITMAP_FIRST_WORD_MASK(start) (~0UL << ((start) % BITS_PER_LONG))
 
 void bitmap_set(unsigned long *map, long start, long nr)
 {

@@ -3,7 +3,7 @@
 # QAPI common definitions
 
 ##
-# @ErrorClass
+# @QapiErrorClass:
 #
 # QEMU error classes
 #
@@ -24,20 +24,21 @@
 #
 # Since: 1.2
 ##
-{ 'enum': 'ErrorClass',
+{ 'enum': 'QapiErrorClass',
+  # Keep this in sync with ErrorClass in error.h
   'data': [ 'GenericError', 'CommandNotFound', 'DeviceEncrypted',
             'DeviceNotActive', 'DeviceNotFound', 'KVMMissingCap' ] }
 
 ##
-# @VersionTriple
+# @VersionTriple:
 #
 # A three-part version number.
 #
-# @qemu.major:  The major version number.
+# @major:  The major version number.
 #
-# @qemu.minor:  The minor version number.
+# @minor:  The minor version number.
 #
-# @qemu.micro:  The micro version number.
+# @micro:  The micro version number.
 #
 # Since: 2.4
 ##
@@ -100,7 +101,7 @@
 { 'command': 'query-commands', 'returns': ['CommandInfo'] }
 
 ##
-# @OnOffAuto
+# @OnOffAuto:
 #
 # An enumeration of three options: on, off, and auto
 #
@@ -114,3 +115,19 @@
 ##
 { 'enum': 'OnOffAuto',
   'data': [ 'auto', 'on', 'off' ] }
+
+##
+# @OnOffSplit:
+#
+# An enumeration of three values: on, off, and split
+#
+# @on: Enabled
+#
+# @off: Disabled
+#
+# @split: Mixed
+#
+# Since: 2.6
+##
+{ 'enum': 'OnOffSplit',
+  'data': [ 'on', 'off', 'split' ] }

@@ -13,6 +13,7 @@
 
 #include "sysemu/kvm.h"
 #include "exec/memory.h"
+#include "qemu/error-report.h"
 
 /**
  * kvm_arm_vcpu_init:
@@ -124,9 +125,12 @@ void kvm_arm_reset_vcpu(ARMCPU *cpu);
  * kvm_arm_create_scratch_host_vcpu:
  * @cpus_to_try: array of QEMU_KVM_ARM_TARGET_* values (terminated with
  * QEMU_KVM_ARM_TARGET_NONE) to try as fallback if the kernel does not
- * know the PREFERRED_TARGET ioctl
+ * know the PREFERRED_TARGET ioctl. Passing NULL is the same as passing
+ * an empty array.
  * @fdarray: filled in with kvmfd, vmfd, cpufd file descriptors in that order
- * @init: filled in with the necessary values for creating a host vcpu
+ * @init: filled in with the necessary values for creating a host
+ * vcpu. If NULL is provided, will not init the vCPU (though the cpufd
+ * will still be set up).
  *
  * Create a scratch vcpu in its own VM of the type preferred by the host
  * kernel (as would be used for '-cpu host'), for purposes of probing it
@@ -191,9 +195,16 @@ int kvm_arm_sync_mpstate_to_qemu(ARMCPU *cpu);
 
 int kvm_arm_vgic_probe(void);
 
+int kvm_arm_pmu_create(CPUState *cs, int irq);
+
 #else
 
 static inline int kvm_arm_vgic_probe(void)
+{
+    return 0;
+}
+
+static inline int kvm_arm_pmu_create(CPUState *cs, int irq)
 {
     return 0;
 }
@@ -213,6 +224,68 @@ static inline const char *gic_class_name(void)
  *
  * Returns: class name to use
  */
-const char *gicv3_class_name(void);
+static inline const char *gicv3_class_name(void)
+{
+    if (kvm_irqchip_in_kernel()) {
+#ifdef TARGET_AARCH64
+        return "kvm-arm-gicv3";
+#else
+        error_report("KVM GICv3 acceleration is not supported on this "
+                     "platform");
+        exit(1);
+#endif
+    } else {
+        return "arm-gicv3";
+    }
+}
+
+/**
+ * kvm_arm_handle_debug:
+ * @cs: CPUState
+ * @debug_exit: debug part of the KVM exit structure
+ *
+ * Returns: TRUE if the debug exception was handled.
+ */
+bool kvm_arm_handle_debug(CPUState *cs, struct kvm_debug_exit_arch *debug_exit);
+
+/**
+ * kvm_arm_hw_debug_active:
+ * @cs: CPU State
+ *
+ * Return: TRUE if any hardware breakpoints in use.
+ */
+
+bool kvm_arm_hw_debug_active(CPUState *cs);
+
+/**
+ * kvm_arm_copy_hw_debug_data:
+ *
+ * @ptr: kvm_guest_debug_arch structure
+ *
+ * Copy the architecture specific debug registers into the
+ * kvm_guest_debug ioctl structure.
+ */
+struct kvm_guest_debug_arch;
+
+void kvm_arm_copy_hw_debug_data(struct kvm_guest_debug_arch *ptr);
+
+/**
+ * its_class_name
+ *
+ * Return the ITS class name to use depending on whether KVM acceleration
+ * and KVM CAP_SIGNAL_MSI are supported
+ *
+ * Returns: class name to use or NULL
+ */
+static inline const char *its_class_name(void)
+{
+    if (kvm_irqchip_in_kernel()) {
+        /* KVM implementation requires this capability */
+        return kvm_direct_msi_enabled() ? "arm-its-kvm" : NULL;
+    } else {
+        /* Software emulation is not implemented yet */
+        return NULL;
+    }
+}
 
 #endif

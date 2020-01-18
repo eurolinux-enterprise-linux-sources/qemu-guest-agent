@@ -18,7 +18,11 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu-common.h"
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "cpu.h"
+#include "qemu/cutils.h"
+#include "qemu/bswap.h"
 #include "sysemu/sysemu.h"
 #include "hw/arm/omap.h"
 #include "hw/arm/arm.h"
@@ -33,6 +37,7 @@
 #include "hw/loader.h"
 #include "sysemu/block-backend.h"
 #include "hw/sysbus.h"
+#include "qemu/log.h"
 #include "exec/address-spaces.h"
 
 /* Nokia N8x0 support */
@@ -172,8 +177,8 @@ static void n8x0_nand_setup(struct n800_s *s)
     qdev_prop_set_int32(s->nand, "shift", 1);
     dinfo = drive_get(IF_MTD, 0, 0);
     if (dinfo) {
-        qdev_prop_set_drive_nofail(s->nand, "drive",
-                                   blk_by_legacy_dinfo(dinfo));
+        qdev_prop_set_drive(s->nand, "drive", blk_by_legacy_dinfo(dinfo),
+                            &error_fatal);
     }
     qdev_init_nofail(s->nand);
     sysbus_connect_irq(SYS_BUS_DEVICE(s->nand), 0,
@@ -781,8 +786,7 @@ static void n8x0_cbus_setup(struct n800_s *s)
 
 static void n8x0_uart_setup(struct n800_s *s)
 {
-    CharDriverState *radio = uart_hci_init(
-                    qdev_get_gpio_in(s->mpu->gpio, N8X0_BT_HOST_WKUP_GPIO));
+    CharDriverState *radio = uart_hci_init();
 
     qdev_connect_gpio_out(s->mpu->gpio, N8X0_BT_RESET_GPIO,
                     csrhci_pins_get(radio)[csrhci_pin_reset]);
@@ -1346,7 +1350,7 @@ static void n8x0_init(MachineState *machine,
     n8x0_dss_setup(s);
     n8x0_cbus_setup(s);
     n8x0_uart_setup(s);
-    if (usb_enabled()) {
+    if (machine_usb(machine)) {
         n8x0_usb_setup(s);
     }
 
@@ -1362,7 +1366,7 @@ static void n8x0_init(MachineState *machine,
 
     if (option_rom[0].name &&
         (machine->boot_order[0] == 'n' || !machine->kernel_filename)) {
-        uint8_t nolo_tags[0x10000];
+        uint8_t *nolo_tags = g_new(uint8_t, 0x10000);
         /* No, wait, better start at the ROM.  */
         s->mpu->cpu->env.regs[15] = OMAP2_Q2_BASE + 0x400000;
 
@@ -1381,6 +1385,7 @@ static void n8x0_init(MachineState *machine,
 
         n800_setup_nolo_tags(nolo_tags);
         cpu_physical_memory_write(OMAP2_SRAM_BASE, nolo_tags, 0x10000);
+        g_free(nolo_tags);
     }
 }
 
@@ -1449,4 +1454,4 @@ static void nseries_machine_init(void)
     type_register_static(&n810_type);
 }
 
-machine_init(nseries_machine_init)
+type_init(nseries_machine_init)

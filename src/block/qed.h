@@ -16,6 +16,7 @@
 #define BLOCK_QED_H
 
 #include "block/block_int.h"
+#include "qemu/cutils.h"
 
 /* The layout of a QED file is as follows:
  *
@@ -129,7 +130,6 @@ enum {
 
 typedef struct QEDAIOCB {
     BlockAIOCB common;
-    QEMUBH *bh;
     int bh_ret;                     /* final return status for completion bh */
     QSIMPLEQ_ENTRY(QEDAIOCB) next;  /* next request */
     int flags;                      /* QED_AIOCB_* bits ORed together */

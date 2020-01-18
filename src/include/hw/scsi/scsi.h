@@ -2,16 +2,16 @@
 #define QEMU_HW_SCSI_H
 
 #include "hw/qdev.h"
-#include "qemu/typedefs.h"
 #include "hw/block/block.h"
 #include "sysemu/sysemu.h"
 #include "qemu/notify.h"
 
 #define MAX_SCSI_DEVS	255
 
-#define SCSI_CMD_BUF_SIZE     16
-#define SCSI_SENSE_LEN      18
-#define SCSI_INQUIRY_LEN    36
+#define SCSI_CMD_BUF_SIZE      16
+#define SCSI_SENSE_LEN         18
+#define SCSI_SENSE_LEN_SCANNER 32
+#define SCSI_INQUIRY_LEN       36
 
 typedef struct SCSIBus SCSIBus;
 typedef struct SCSIBusInfo SCSIBusInfo;
@@ -108,6 +108,8 @@ struct SCSIDevice
     int blocksize;
     int type;
     uint64_t max_lba;
+    uint64_t wwn;
+    uint64_t port_wwn;
 };
 
 extern const VMStateDescription vmstate_scsi_device;
@@ -241,7 +243,6 @@ extern const struct SCSISense sense_code_SPACE_ALLOC_FAILED;
 uint32_t scsi_data_cdb_xfer(uint8_t *buf);
 uint32_t scsi_cdb_xfer(uint8_t *buf);
 int scsi_cdb_length(uint8_t *buf);
-int scsi_sense_valid(SCSISense sense);
 int scsi_build_sense(uint8_t *in_buf, int in_len,
                      uint8_t *buf, int len, bool fixed);
 
@@ -271,6 +272,7 @@ void scsi_device_purge_requests(SCSIDevice *sdev, SCSISense sense);
 void scsi_device_set_ua(SCSIDevice *sdev, SCSISense sense);
 void scsi_device_report_change(SCSIDevice *dev, SCSISense sense);
 void scsi_device_unit_attention_reported(SCSIDevice *dev);
+void scsi_generic_read_device_identification(SCSIDevice *dev);
 int scsi_device_get_sense(SCSIDevice *dev, uint8_t *buf, int len, bool fixed);
 SCSIDevice *scsi_device_find(SCSIBus *bus, int channel, int target, int lun);
 

@@ -21,6 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
+#include "qemu/cutils.h"
+#include "qemu/bcd.h"
 #include "hw/hw.h"
 #include "qemu/timer.h"
 #include "sysemu/sysemu.h"
@@ -102,12 +105,10 @@ static inline bool rtc_running(RTCState *s)
 
 static uint64_t get_guest_rtc_ns(RTCState *s)
 {
-    uint64_t guest_rtc;
     uint64_t guest_clock = qemu_clock_get_ns(rtc_clock);
 
-    guest_rtc = s->base_rtc * NANOSECONDS_PER_SECOND
-                 + guest_clock - s->last_update + s->offset;
-    return guest_rtc;
+    return s->base_rtc * NANOSECONDS_PER_SECOND +
+        guest_clock - s->last_update + s->offset;
 }
 
 #ifdef TARGET_I386
@@ -119,7 +120,7 @@ static void rtc_coalesced_timer_update(RTCState *s)
         /* divide each RTC interval to 2 - 8 smaller intervals */
         int c = MIN(s->irq_coalesced, 7) + 1; 
         int64_t next_clock = qemu_clock_get_ns(rtc_clock) +
-            muldiv64(s->period / c, get_ticks_per_sec(), RTC_CLOCK_RATE);
+            muldiv64(s->period / c, NANOSECONDS_PER_SECOND, RTC_CLOCK_RATE);
         timer_mod(s->coalesced_timer, next_clock);
     }
 }
@@ -165,10 +166,12 @@ static void periodic_timer_update(RTCState *s, int64_t current_time)
         s->period = period;
 #endif
         /* compute 32 khz clock */
-        cur_clock = muldiv64(current_time, RTC_CLOCK_RATE, get_ticks_per_sec());
+        cur_clock =
+            muldiv64(current_time, RTC_CLOCK_RATE, NANOSECONDS_PER_SECOND);
+
         next_irq_clock = (cur_clock & ~(period - 1)) + period;
-        s->next_periodic_time =
-            muldiv64(next_irq_clock, get_ticks_per_sec(), RTC_CLOCK_RATE) + 1;
+        s->next_periodic_time = muldiv64(next_irq_clock, NANOSECONDS_PER_SECOND,
+                                         RTC_CLOCK_RATE) + 1;
         timer_mod(s->periodic_timer, s->next_periodic_time);
     } else {
 #ifdef TARGET_I386
@@ -714,11 +717,18 @@ static void rtc_set_date_from_host(ISADevice *dev)
     rtc_set_cmos(s, &tm);
 }
 
+static void rtc_pre_save(void *opaque)
+{
+    RTCState *s = opaque;
+
+    rtc_update_time(s);
+}
+
 static int rtc_post_load(void *opaque, int version_id)
 {
     RTCState *s = opaque;
 
-    if (version_id <= 2) {
+    if (version_id <= 2 || rtc_clock == QEMU_CLOCK_REALTIME) {
         rtc_set_time(s);
         s->offset = 0;
         check_update_timer(s);
@@ -761,6 +771,7 @@ static const VMStateDescription vmstate_rtc = {
     .name = "mc146818rtc",
     .version_id = 3,
     .minimum_version_id = 1,
+    .pre_save = rtc_pre_save,
     .post_load = rtc_post_load,
     .fields = (VMStateField[]) {
         VMSTATE_BUFFER(cmos_data, RTCState),
@@ -903,6 +914,8 @@ static void rtc_realizefn(DeviceState *dev, Error **errp)
 
     object_property_add_alias(qdev_get_machine(), "rtc-time",
                               OBJECT(s), "date", NULL);
+
+    qdev_init_gpio_out(dev, &s->irq, 1);
 }
 
 ISADevice *rtc_init(ISABus *bus, int base_year, qemu_irq intercept_irq)
@@ -917,9 +930,9 @@ ISADevice *rtc_init(ISABus *bus, int base_year, qemu_irq intercept_irq)
     qdev_prop_set_int32(dev, "base_year", base_year);
     qdev_init_nofail(dev);
     if (intercept_irq) {
-        s->irq = intercept_irq;
+        qdev_connect_gpio_out(dev, 0, intercept_irq);
     } else {
-        isa_init_irq(isadev, &s->irq, RTC_ISA_IRQ);
+        isa_connect_gpio_out(isadev, 0, RTC_ISA_IRQ);
     }
     QLIST_INSERT_HEAD(&rtc_devices, s, link);
 

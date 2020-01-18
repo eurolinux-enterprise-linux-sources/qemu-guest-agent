@@ -15,6 +15,7 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "block/block.h"
 #include "qemu/queue.h"
@@ -370,6 +371,6 @@ bool aio_poll(AioContext *ctx, bool blocking)
     return progress;
 }
 
-void aio_context_setup(AioContext *ctx, Error **errp)
+void aio_context_setup(AioContext *ctx)
 {
 }

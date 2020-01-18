@@ -28,7 +28,7 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <stdio.h>
+#include "qemu/osdep.h"
 
 #include "cpu.h"
 #include "exec/exec-all.h"
@@ -43,6 +43,7 @@
 #include "exec/helper-gen.h"
 
 #include "trace-tcg.h"
+#include "exec/log.h"
 
 
 typedef struct DisasContext {
@@ -73,7 +74,7 @@ typedef struct DisasContext {
     unsigned cpenable;
 } DisasContext;
 
-static TCGv_ptr cpu_env;
+static TCGv_env cpu_env;
 static TCGv_i32 cpu_pc;
 static TCGv_i32 cpu_R[16];
 static TCGv_i32 cpu_FR[16];
@@ -217,24 +218,25 @@ void xtensa_translate_init(void)
     int i;
 
     cpu_env = tcg_global_reg_new_ptr(TCG_AREG0, "env");
-    cpu_pc = tcg_global_mem_new_i32(TCG_AREG0,
+    tcg_ctx.tcg_env = cpu_env;
+    cpu_pc = tcg_global_mem_new_i32(cpu_env,
             offsetof(CPUXtensaState, pc), "pc");
 
     for (i = 0; i < 16; i++) {
-        cpu_R[i] = tcg_global_mem_new_i32(TCG_AREG0,
+        cpu_R[i] = tcg_global_mem_new_i32(cpu_env,
                 offsetof(CPUXtensaState, regs[i]),
                 regnames[i]);
     }
 
     for (i = 0; i < 16; i++) {
-        cpu_FR[i] = tcg_global_mem_new_i32(TCG_AREG0,
+        cpu_FR[i] = tcg_global_mem_new_i32(cpu_env,
                 offsetof(CPUXtensaState, fregs[i].f32[FP_F32_LOW]),
                 fregnames[i]);
     }
 
     for (i = 0; i < 256; ++i) {
         if (sregnames[i].name) {
-            cpu_SR[i] = tcg_global_mem_new_i32(TCG_AREG0,
+            cpu_SR[i] = tcg_global_mem_new_i32(cpu_env,
                     offsetof(CPUXtensaState, sregs[i]),
                     sregnames[i].name);
         }
@@ -242,7 +244,7 @@ void xtensa_translate_init(void)
 
     for (i = 0; i < 256; ++i) {
         if (uregnames[i].name) {
-            cpu_UR[i] = tcg_global_mem_new_i32(TCG_AREG0,
+            cpu_UR[i] = tcg_global_mem_new_i32(cpu_env,
                     offsetof(CPUXtensaState, uregs[i]),
                     uregnames[i].name);
         }
@@ -417,9 +419,11 @@ static void gen_jump(DisasContext *dc, TCGv dest)
 static void gen_jumpi(DisasContext *dc, uint32_t dest, int slot)
 {
     TCGv_i32 tmp = tcg_const_i32(dest);
+#ifndef CONFIG_USER_ONLY
     if (((dc->tb->pc ^ dest) & TARGET_PAGE_MASK) != 0) {
         slot = -1;
     }
+#endif
     gen_jump_slot(dc, tmp, slot);
     tcg_temp_free(tmp);
 }
@@ -445,9 +449,11 @@ static void gen_callw(DisasContext *dc, int callinc, TCGv_i32 dest)
 static void gen_callwi(DisasContext *dc, int callinc, uint32_t dest, int slot)
 {
     TCGv_i32 tmp = tcg_const_i32(dest);
+#ifndef CONFIG_USER_ONLY
     if (((dc->tb->pc ^ dest) & TARGET_PAGE_MASK) != 0) {
         slot = -1;
     }
+#endif
     gen_callw_slot(dc, callinc, tmp, slot);
     tcg_temp_free(tmp);
 }
@@ -501,9 +507,9 @@ static bool gen_check_sr(DisasContext *dc, uint32_t sr, unsigned access)
 {
     if (!xtensa_option_bits_enabled(dc->config, sregnames[sr].opt_bits)) {
         if (sregnames[sr].name) {
-            qemu_log("SR %s is not configured\n", sregnames[sr].name);
+            qemu_log_mask(LOG_GUEST_ERROR, "SR %s is not configured\n", sregnames[sr].name);
         } else {
-            qemu_log("SR %d is not implemented\n", sr);
+            qemu_log_mask(LOG_UNIMP, "SR %d is not implemented\n", sr);
         }
         gen_exception_cause(dc, ILLEGAL_INSTRUCTION_CAUSE);
         return false;
@@ -514,8 +520,8 @@ static bool gen_check_sr(DisasContext *dc, uint32_t sr, unsigned access)
             [SR_X] = "xsr",
         };
         assert(access < ARRAY_SIZE(access_text) && access_text[access]);
-        qemu_log("SR %s is not available for %s\n", sregnames[sr].name,
-                access_text[access]);
+        qemu_log_mask(LOG_GUEST_ERROR, "SR %s is not available for %s\n", sregnames[sr].name,
+                      access_text[access]);
         gen_exception_cause(dc, ILLEGAL_INSTRUCTION_CAUSE);
         return false;
     }
@@ -875,18 +881,18 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
 {
 #define HAS_OPTION_BITS(opt) do { \
         if (!option_bits_enabled(dc, opt)) { \
-            qemu_log("Option is not enabled %s:%d\n", \
-                    __FILE__, __LINE__); \
+            qemu_log_mask(LOG_GUEST_ERROR, "Option is not enabled %s:%d\n", \
+                          __FILE__, __LINE__); \
             goto invalid_opcode; \
         } \
     } while (0)
 
 #define HAS_OPTION(opt) HAS_OPTION_BITS(XTENSA_OPTION_BIT(opt))
 
-#define TBD() qemu_log("TBD(pc = %08x): %s:%d\n", dc->pc, __FILE__, __LINE__)
+#define TBD() qemu_log_mask(LOG_UNIMP, "TBD(pc = %08x): %s:%d\n", dc->pc, __FILE__, __LINE__)
 #define RESERVED() do { \
-        qemu_log("RESERVED(pc = %08x, %02x%02x%02x): %s:%d\n", \
-                dc->pc, b0, b1, b2, __FILE__, __LINE__); \
+        qemu_log_mask(LOG_GUEST_ERROR, "RESERVED(pc = %08x, %02x%02x%02x): %s:%d\n", \
+                      dc->pc, b0, b1, b2, __FILE__, __LINE__); \
         goto invalid_opcode; \
     } while (0)
 
@@ -1186,7 +1192,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
                                 gen_jump(dc, cpu_SR[EPC1 + RRR_S - 1]);
                             }
                         } else {
-                            qemu_log("RFI %d is illegal\n", RRR_S);
+                            qemu_log_mask(LOG_GUEST_ERROR, "RFI %d is illegal\n", RRR_S);
                             gen_exception_cause(dc, ILLEGAL_INSTRUCTION_CAUSE);
                         }
                         break;
@@ -1222,7 +1228,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
                                 gen_helper_simcall(cpu_env);
                             }
                         } else {
-                            qemu_log("SIMCALL but semihosting is disabled\n");
+                            qemu_log_mask(LOG_GUEST_ERROR, "SIMCALL but semihosting is disabled\n");
                             gen_exception_cause(dc, ILLEGAL_INSTRUCTION_CAUSE);
                         }
                         break;
@@ -1865,7 +1871,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
                     if (uregnames[st].name) {
                         tcg_gen_mov_i32(cpu_R[RRR_R], cpu_UR[st]);
                     } else {
-                        qemu_log("RUR %d not implemented, ", st);
+                        qemu_log_mask(LOG_UNIMP, "RUR %d not implemented, ", st);
                         TBD();
                     }
                 }
@@ -1876,7 +1882,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
                     if (uregnames[RSR_SR].name) {
                         gen_wur(RSR_SR, cpu_R[RRR_T]);
                     } else {
-                        qemu_log("WUR %d not implemented, ", RSR_SR);
+                        qemu_log_mask(LOG_UNIMP, "WUR %d not implemented, ", RSR_SR);
                         TBD();
                     }
                 }
@@ -3006,7 +3012,7 @@ static void disas_xtensa_insn(CPUXtensaState *env, DisasContext *dc)
     return;
 
 invalid_opcode:
-    qemu_log("INVALID(pc = %08x)\n", dc->pc);
+    qemu_log_mask(LOG_GUEST_ERROR, "INVALID(pc = %08x)\n", dc->pc);
     gen_exception_cause(dc, ILLEGAL_INSTRUCTION_CAUSE);
 #undef HAS_OPTION
 }
@@ -3147,11 +3153,14 @@ void gen_intermediate_code(CPUXtensaState *env, TranslationBlock *tb)
     gen_tb_end(tb, insn_count);
 
 #ifdef DEBUG_DISAS
-    if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)) {
+    if (qemu_loglevel_mask(CPU_LOG_TB_IN_ASM)
+        && qemu_log_in_addr_range(pc_start)) {
+        qemu_log_lock();
         qemu_log("----------------\n");
         qemu_log("IN: %s\n", lookup_symbol(pc_start));
         log_target_disas(cs, pc_start, dc.pc - pc_start, 0);
         qemu_log("\n");
+        qemu_log_unlock();
     }
 #endif
     tb->size = dc.pc - pc_start;

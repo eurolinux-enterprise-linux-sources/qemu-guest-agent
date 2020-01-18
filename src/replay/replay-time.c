@@ -9,6 +9,7 @@
  *
  */
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "sysemu/replay.h"
 #include "replay-internal.h"
@@ -30,7 +31,7 @@ int64_t replay_save_clock(ReplayClockKind kind, int64_t clock)
 
 void replay_read_next_clock(ReplayClockKind kind)
 {
-    unsigned int read_kind = replay_data_kind - EVENT_CLOCK;
+    unsigned int read_kind = replay_state.data_kind - EVENT_CLOCK;
 
     assert(read_kind == kind);
 

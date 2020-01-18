@@ -3,11 +3,9 @@
 
 #include "qemu/queue.h"
 #include "qemu/option.h"
-#include "qemu/typedefs.h"
 #include "qemu/bitmap.h"
 #include "qom/object.h"
 #include "hw/irq.h"
-#include "qapi/error.h"
 #include "hw/hotplug.h"
 
 enum {
@@ -226,7 +224,7 @@ typedef struct BusChild {
 struct BusState {
     Object obj;
     DeviceState *parent;
-    const char *name;
+    char *name;
     HotplugHandler *hotplug_handler;
     int max_index;
     bool realized;
@@ -239,7 +237,7 @@ struct Property {
     PropertyInfo *info;
     ptrdiff_t    offset;
     uint8_t      bitnr;
-    qtype_code   qtype;
+    QType        qtype;
     int64_t      defval;
     int          arrayoffset;
     PropertyInfo *arrayinfo;
@@ -261,6 +259,11 @@ struct PropertyInfo {
  * @user_provided: Set to true if property comes from user-provided config
  * (command-line or config file).
  * @used: Set to true if property was used when initializing a device.
+ * @errp: Error destination, used like first argument of error_setg()
+ *        in case property setting fails later. If @errp is NULL, we
+ *        print warnings instead of ignoring errors silently. For
+ *        hotplugged devices, errp is always ignored and warnings are
+ *        printed instead.
  */
 typedef struct GlobalProperty {
     const char *driver;
@@ -268,7 +271,7 @@ typedef struct GlobalProperty {
     const char *value;
     bool user_provided;
     bool used;
-    QTAILQ_ENTRY(GlobalProperty) next;
+    Error **errp;
 } GlobalProperty;
 
 /*** Board API.  This should go away once we have a machine config file.  ***/

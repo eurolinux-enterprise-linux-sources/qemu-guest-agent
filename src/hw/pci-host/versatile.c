@@ -7,11 +7,13 @@
  * This code is licensed under the LGPL.
  */
 
+#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_bus.h"
 #include "hw/pci/pci_host.h"
 #include "exec/address-spaces.h"
+#include "qemu/log.h"
 
 /* Old and buggy versions of QEMU used the wrong mapping from
  * PCI IRQs to system interrupt lines. Unfortunately the Linux
@@ -453,6 +455,7 @@ static void pci_vpb_realize(DeviceState *dev, Error **errp)
     }
 
     /* TODO Remove once realize propagates to child devices. */
+    object_property_set_bool(OBJECT(&s->pci_bus), true, "realized", errp);
     object_property_set_bool(OBJECT(&s->pci_dev), true, "realized", errp);
 }
 

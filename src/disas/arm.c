@@ -22,9 +22,8 @@
 /* Start of qemu specific additions.  Mostly this is stub definitions
    for things we don't care about.  */
 
+#include "qemu/osdep.h"
 #include "disas/bfd.h"
-#define ATTRIBUTE_UNUSED __attribute__((unused))
-#define ISSPACE(x) ((x) == ' ' || (x) == '\t' || (x) == '\n')
 
 #define ARM_EXT_V1	 0
 #define ARM_EXT_V2	 0
@@ -72,15 +71,6 @@ static void floatformat_to_double (unsigned char *data, double *dest)
 }
 
 /* End of qemu specific additions.  */
-
-/* FIXME: Belongs in global header.  */
-#ifndef strneq
-#define strneq(a,b,n)	(strncmp ((a), (b), (n)) == 0)
-#endif
-
-#ifndef NUM_ELEM
-#define NUM_ELEM(a)     (sizeof (a) / sizeof (a)[0])
-#endif
 
 struct opcode32
 {
@@ -1528,7 +1518,6 @@ static const char *const iwmmxt_cregnames[] =
 /* Default to GCC register name set.  */
 static unsigned int regname_selected = 1;
 
-#define NUM_ARM_REGNAMES  NUM_ELEM (regnames)
 #define arm_regnames      regnames[regname_selected].reg_names
 
 static bfd_boolean force_thumb = false;
@@ -1816,7 +1805,7 @@ print_insn_coprocessor (bfd_vma pc, struct disassemble_info *info, long given,
 			  func (stream, "e");
 			  break;
 			default:
-			  func (stream, _("<illegal precision>"));
+			  func (stream, "<illegal precision>");
 			  break;
 			}
 		      break;

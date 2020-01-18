@@ -18,10 +18,13 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "qemu/log.h"
 #include "exec/helper-proto.h"
+#include "exec/exec-all.h"
 #include "exec/cpu_ldst.h"
+#include "exec/log.h"
 
 //#define DEBUG_PCALL
 
@@ -1126,29 +1129,35 @@ static void do_interrupt_real(CPUX86State *env, int intno, int is_int,
 }
 
 #if defined(CONFIG_USER_ONLY)
-/* fake user mode interrupt */
+/* fake user mode interrupt. is_int is TRUE if coming from the int
+ * instruction. next_eip is the env->eip value AFTER the interrupt
+ * instruction. It is only relevant if is_int is TRUE or if intno
+ * is EXCP_SYSCALL.
+ */
 static void do_interrupt_user(CPUX86State *env, int intno, int is_int,
                               int error_code, target_ulong next_eip)
 {
-    SegmentCache *dt;
-    target_ulong ptr;
-    int dpl, cpl, shift;
-    uint32_t e2;
+    if (is_int) {
+        SegmentCache *dt;
+        target_ulong ptr;
+        int dpl, cpl, shift;
+        uint32_t e2;
 
-    dt = &env->idt;
-    if (env->hflags & HF_LMA_MASK) {
-        shift = 4;
-    } else {
-        shift = 3;
-    }
-    ptr = dt->base + (intno << shift);
-    e2 = cpu_ldl_kernel(env, ptr + 4);
+        dt = &env->idt;
+        if (env->hflags & HF_LMA_MASK) {
+            shift = 4;
+        } else {
+            shift = 3;
+        }
+        ptr = dt->base + (intno << shift);
+        e2 = cpu_ldl_kernel(env, ptr + 4);
 
-    dpl = (e2 >> DESC_DPL_SHIFT) & 3;
-    cpl = env->hflags & HF_CPL_MASK;
-    /* check privilege if software int */
-    if (is_int && dpl < cpl) {
-        raise_exception_err(env, EXCP0D_GPF, (intno << shift) + 2);
+        dpl = (e2 >> DESC_DPL_SHIFT) & 3;
+        cpl = env->hflags & HF_CPL_MASK;
+        /* check privilege if software int */
+        if (dpl < cpl) {
+            raise_exception_err(env, EXCP0D_GPF, (intno << shift) + 2);
+        }
     }
 
     /* Since we emulate only user space, we cannot do more than
@@ -1376,80 +1385,6 @@ bool x86_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
 
     return ret;
 }
-
-void helper_enter_level(CPUX86State *env, int level, int data32,
-                        target_ulong t1)
-{
-    target_ulong ssp;
-    uint32_t esp_mask, esp, ebp;
-
-    esp_mask = get_sp_mask(env->segs[R_SS].flags);
-    ssp = env->segs[R_SS].base;
-    ebp = env->regs[R_EBP];
-    esp = env->regs[R_ESP];
-    if (data32) {
-        /* 32 bit */
-        esp -= 4;
-        while (--level) {
-            esp -= 4;
-            ebp -= 4;
-            cpu_stl_data_ra(env, ssp + (esp & esp_mask),
-                            cpu_ldl_data_ra(env, ssp + (ebp & esp_mask),
-                                            GETPC()),
-                            GETPC());
-        }
-        esp -= 4;
-        cpu_stl_data_ra(env, ssp + (esp & esp_mask), t1, GETPC());
-    } else {
-        /* 16 bit */
-        esp -= 2;
-        while (--level) {
-            esp -= 2;
-            ebp -= 2;
-            cpu_stw_data_ra(env, ssp + (esp & esp_mask),
-                            cpu_lduw_data_ra(env, ssp + (ebp & esp_mask),
-                                             GETPC()),
-                            GETPC());
-        }
-        esp -= 2;
-        cpu_stw_data_ra(env, ssp + (esp & esp_mask), t1, GETPC());
-    }
-}
-
-#ifdef TARGET_X86_64
-void helper_enter64_level(CPUX86State *env, int level, int data64,
-                          target_ulong t1)
-{
-    target_ulong esp, ebp;
-
-    ebp = env->regs[R_EBP];
-    esp = env->regs[R_ESP];
-
-    if (data64) {
-        /* 64 bit */
-        esp -= 8;
-        while (--level) {
-            esp -= 8;
-            ebp -= 8;
-            cpu_stq_data_ra(env, esp, cpu_ldq_data_ra(env, ebp, GETPC()),
-                            GETPC());
-        }
-        esp -= 8;
-        cpu_stq_data_ra(env, esp, t1, GETPC());
-    } else {
-        /* 16 bit */
-        esp -= 2;
-        while (--level) {
-            esp -= 2;
-            ebp -= 2;
-            cpu_stw_data_ra(env, esp, cpu_lduw_data_ra(env, ebp, GETPC()),
-                            GETPC());
-        }
-        esp -= 2;
-        cpu_stw_data_ra(env, esp, t1, GETPC());
-    }
-}
-#endif
 
 void helper_lldt(CPUX86State *env, int selector)
 {

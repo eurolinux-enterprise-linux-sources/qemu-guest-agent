@@ -16,9 +16,7 @@
  * source to the destination before all the data has been copied.
  */
 
-#include <glib.h>
-#include <stdio.h>
-#include <unistd.h>
+#include "qemu/osdep.h"
 
 #include "qemu-common.h"
 #include "migration/migration.h"
@@ -53,15 +51,13 @@ struct PostcopyDiscardState {
 #if defined(__linux__)
 
 #include <poll.h>
-#include <sys/eventfd.h>
-#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
-#include <sys/types.h>
 #include <asm/types.h> /* for __u64 */
 #endif
 
-#if defined(__linux__) && defined(__NR_userfaultfd)
+#if defined(__linux__) && defined(__NR_userfaultfd) && defined(CONFIG_EVENTFD)
+#include <sys/eventfd.h>
 #include <linux/userfaultfd.h>
 
 static bool ufd_version_check(int ufd)
@@ -89,6 +85,24 @@ static bool ufd_version_check(int ufd)
 }
 
 /*
+ * Check for things that postcopy won't support; returns 0 if the block
+ * is fine.
+ */
+static int check_range(const char *block_name, void *host_addr,
+                      ram_addr_t offset, ram_addr_t length, void *opaque)
+{
+    RAMBlock *rb = qemu_ram_block_by_name(block_name);
+
+    if (qemu_ram_pagesize(rb) > getpagesize()) {
+        error_report("Postcopy doesn't support large page sizes yet (%s)",
+                     block_name);
+        return -E2BIG;
+    }
+
+    return 0;
+}
+
+/*
  * Note: This has the side effect of munlock'ing all of RAM, that's
  * normally fine since if the postcopy succeeds it gets turned back on at the
  * end.
@@ -105,6 +119,12 @@ bool postcopy_ram_supported_by_host(void)
 
     if ((1ul << qemu_target_page_bits()) > pagesize) {
         error_report("Target page size bigger than host page size");
+        goto out;
+    }
+
+    /* Check for anything about the RAMBlocks we don't support */
+    if (qemu_ram_foreach_block(check_range, NULL)) {
+        /* check_range will have printed its own error */
         goto out;
     }
 
@@ -409,7 +429,6 @@ static void *postcopy_ram_fault_thread(void *opaque)
 
     while (true) {
         ram_addr_t rb_offset;
-        ram_addr_t in_raspace;
         struct pollfd pfd[2];
 
         /*
@@ -461,7 +480,7 @@ static void *postcopy_ram_fault_thread(void *opaque)
 
         rb = qemu_ram_block_from_host(
                  (void *)(uintptr_t)msg.arg.pagefault.address,
-                 true, &in_raspace, &rb_offset);
+                 true, &rb_offset);
         if (!rb) {
             error_report("postcopy_ram_fault_thread: Fault outside guest: %"
                          PRIx64, (uint64_t)msg.arg.pagefault.address);
@@ -609,7 +628,8 @@ void *postcopy_get_tmp_page(MigrationIncomingState *mis)
         mis->postcopy_tmp_page = mmap(NULL, getpagesize(),
                              PROT_READ | PROT_WRITE, MAP_PRIVATE |
                              MAP_ANONYMOUS, -1, 0);
-        if (!mis->postcopy_tmp_page) {
+        if (mis->postcopy_tmp_page == MAP_FAILED) {
+            mis->postcopy_tmp_page = NULL;
             error_report("%s: %s", __func__, strerror(errno));
             return NULL;
         }
@@ -727,7 +747,8 @@ void postcopy_discard_send_range(MigrationState *ms, PostcopyDiscardState *pds,
 
     if (pds->cur_entry == MAX_DISCARDS_PER_COMMAND) {
         /* Full set, ship it! */
-        qemu_savevm_send_postcopy_ram_discard(ms->file, pds->ramblock_name,
+        qemu_savevm_send_postcopy_ram_discard(ms->to_dst_file,
+                                              pds->ramblock_name,
                                               pds->cur_entry,
                                               pds->start_list,
                                               pds->length_list);
@@ -747,7 +768,8 @@ void postcopy_discard_send_finish(MigrationState *ms, PostcopyDiscardState *pds)
 {
     /* Anything unsent? */
     if (pds->cur_entry) {
-        qemu_savevm_send_postcopy_ram_discard(ms->file, pds->ramblock_name,
+        qemu_savevm_send_postcopy_ram_discard(ms->to_dst_file,
+                                              pds->ramblock_name,
                                               pds->cur_entry,
                                               pds->start_list,
                                               pds->length_list);

@@ -16,8 +16,11 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/helper-proto.h"
+#include "exec/exec-all.h"
+#include "qemu/log.h"
 
 /*****************************************************************************/
 /* SPR accesses */
@@ -100,6 +103,16 @@ void helper_store_decr(CPUPPCState *env, target_ulong val)
     cpu_ppc_store_decr(env, val);
 }
 
+target_ulong helper_load_hdecr(CPUPPCState *env)
+{
+    return cpu_ppc_load_hdecr(env);
+}
+
+void helper_store_hdecr(CPUPPCState *env, target_ulong val)
+{
+    cpu_ppc_store_hdecr(env, val);
+}
+
 target_ulong helper_load_40x_pit(CPUPPCState *env)
 {
     return load_40x_pit(env);
@@ -130,15 +143,17 @@ target_ulong helper_load_dcr(CPUPPCState *env, target_ulong dcrn)
     uint32_t val = 0;
 
     if (unlikely(env->dcr_env == NULL)) {
-        qemu_log("No DCR environment\n");
-        helper_raise_exception_err(env, POWERPC_EXCP_PROGRAM,
-                                   POWERPC_EXCP_INVAL |
-                                   POWERPC_EXCP_INVAL_INVAL);
+        qemu_log_mask(LOG_GUEST_ERROR, "No DCR environment\n");
+        raise_exception_err_ra(env, POWERPC_EXCP_PROGRAM,
+                               POWERPC_EXCP_INVAL |
+                               POWERPC_EXCP_INVAL_INVAL, GETPC());
     } else if (unlikely(ppc_dcr_read(env->dcr_env,
                                      (uint32_t)dcrn, &val) != 0)) {
-        qemu_log("DCR read error %d %03x\n", (uint32_t)dcrn, (uint32_t)dcrn);
-        helper_raise_exception_err(env, POWERPC_EXCP_PROGRAM,
-                                   POWERPC_EXCP_INVAL | POWERPC_EXCP_PRIV_REG);
+        qemu_log_mask(LOG_GUEST_ERROR, "DCR read error %d %03x\n",
+                      (uint32_t)dcrn, (uint32_t)dcrn);
+        raise_exception_err_ra(env, POWERPC_EXCP_PROGRAM,
+                               POWERPC_EXCP_INVAL |
+                               POWERPC_EXCP_PRIV_REG, GETPC());
     }
     return val;
 }
@@ -146,14 +161,16 @@ target_ulong helper_load_dcr(CPUPPCState *env, target_ulong dcrn)
 void helper_store_dcr(CPUPPCState *env, target_ulong dcrn, target_ulong val)
 {
     if (unlikely(env->dcr_env == NULL)) {
-        qemu_log("No DCR environment\n");
-        helper_raise_exception_err(env, POWERPC_EXCP_PROGRAM,
-                                   POWERPC_EXCP_INVAL |
-                                   POWERPC_EXCP_INVAL_INVAL);
+        qemu_log_mask(LOG_GUEST_ERROR, "No DCR environment\n");
+        raise_exception_err_ra(env, POWERPC_EXCP_PROGRAM,
+                               POWERPC_EXCP_INVAL |
+                               POWERPC_EXCP_INVAL_INVAL, GETPC());
     } else if (unlikely(ppc_dcr_write(env->dcr_env, (uint32_t)dcrn,
                                       (uint32_t)val) != 0)) {
-        qemu_log("DCR write error %d %03x\n", (uint32_t)dcrn, (uint32_t)dcrn);
-        helper_raise_exception_err(env, POWERPC_EXCP_PROGRAM,
-                                   POWERPC_EXCP_INVAL | POWERPC_EXCP_PRIV_REG);
+        qemu_log_mask(LOG_GUEST_ERROR, "DCR write error %d %03x\n",
+                      (uint32_t)dcrn, (uint32_t)dcrn);
+        raise_exception_err_ra(env, POWERPC_EXCP_PROGRAM,
+                               POWERPC_EXCP_INVAL |
+                               POWERPC_EXCP_PRIV_REG, GETPC());
     }
 }

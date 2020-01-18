@@ -16,10 +16,9 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef CPU_ARM_H
-#define CPU_ARM_H
 
-#include "config.h"
+#ifndef ARM_CPU_H
+#define ARM_CPU_H
 
 #include "kvm-consts.h"
 
@@ -30,11 +29,10 @@
 #  define TARGET_LONG_BITS 32
 #endif
 
-#define TARGET_IS_BIENDIAN 1
-
 #define CPUArchState struct CPUARMState
 
 #include "qemu-common.h"
+#include "cpu-qom.h"
 #include "exec/cpu-defs.h"
 
 #include "fpu/softfloat.h"
@@ -48,13 +46,12 @@
 #define EXCP_BKPT            7
 #define EXCP_EXCEPTION_EXIT  8   /* Return from v7M exception.  */
 #define EXCP_KERNEL_TRAP     9   /* Jumped to kernel code page.  */
-#define EXCP_STREX          10
 #define EXCP_HVC            11   /* HyperVisor Call */
 #define EXCP_HYP_TRAP       12
 #define EXCP_SMC            13   /* Secure Monitor Call */
 #define EXCP_VIRQ           14
 #define EXCP_VFIQ           15
-#define EXCP_SEMIHOST       16   /* semihosting call (A64 only) */
+#define EXCP_SEMIHOST       16   /* semihosting call */
 
 #define ARMV7M_EXCP_RESET   1
 #define ARMV7M_EXCP_NMI     2
@@ -92,10 +89,20 @@
 #define ARM_CPU_VIRQ 2
 #define ARM_CPU_VFIQ 3
 
-struct arm_boot_info;
-
 #define NB_MMU_MODES 7
-#define TARGET_INSN_START_EXTRA_WORDS 1
+/* ARM-specific extra insn start words:
+ * 1: Conditional execution bits
+ * 2: Partial exception syndrome for data aborts
+ */
+#define TARGET_INSN_START_EXTRA_WORDS 2
+
+/* The 2nd extra word holding syndrome info for data aborts does not use
+ * the upper 6 bits nor the lower 14 bits. We mask and shift it down to
+ * help the sleb128 encoder do a better job.
+ * When restoring the CPU state, we shift it back up.
+ */
+#define ARM_INSN_START_WORD2_MASK ((1 << 26) - 1)
+#define ARM_INSN_START_WORD2_SHIFT 14
 
 /* We currently assume float and double are IEEE single and double
    precision respectively.
@@ -280,6 +287,7 @@ typedef struct CPUARMState {
             uint64_t far_el[4];
         };
         uint64_t hpfar_el2;
+        uint64_t hstr_el2;
         union { /* Translation result. */
             struct {
                 uint64_t _unused_par_0;
@@ -382,6 +390,7 @@ typedef struct CPUARMState {
         uint64_t mdscr_el1;
         uint64_t oslsr_el1; /* OS Lock Status */
         uint64_t mdcr_el2;
+        uint64_t mdcr_el3;
         /* If the counter is enabled, this stores the last time the counter
          * was reset. Otherwise it stores the counter value
          */
@@ -465,10 +474,6 @@ typedef struct CPUARMState {
     uint64_t exclusive_addr;
     uint64_t exclusive_val;
     uint64_t exclusive_high;
-#if defined(CONFIG_USER_ONLY)
-    uint64_t exclusive_test;
-    uint32_t exclusive_info;
-#endif
 
     /* iwMMXt coprocessor state.  */
     struct {
@@ -477,9 +482,6 @@ typedef struct CPUARMState {
 
         uint32_t cregs[16];
     } iwmmxt;
-
-    /* For mixed endian mode.  */
-    bool bswap_code;
 
 #if defined(CONFIG_USER_ONLY)
     /* For usermode syscall translation.  */
@@ -507,10 +509,195 @@ typedef struct CPUARMState {
     const struct arm_boot_info *boot_info;
 } CPUARMState;
 
-#include "cpu-qom.h"
+/**
+ * ARMELChangeHook:
+ * type of a function which can be registered via arm_register_el_change_hook()
+ * to get callbacks when the CPU changes its exception level or mode.
+ */
+typedef void ARMELChangeHook(ARMCPU *cpu, void *opaque);
+
+/**
+ * ARMCPU:
+ * @env: #CPUARMState
+ *
+ * An ARM CPU core.
+ */
+struct ARMCPU {
+    /*< private >*/
+    CPUState parent_obj;
+    /*< public >*/
+
+    CPUARMState env;
+
+    /* Coprocessor information */
+    GHashTable *cp_regs;
+    /* For marshalling (mostly coprocessor) register state between the
+     * kernel and QEMU (for KVM) and between two QEMUs (for migration),
+     * we use these arrays.
+     */
+    /* List of register indexes managed via these arrays; (full KVM style
+     * 64 bit indexes, not CPRegInfo 32 bit indexes)
+     */
+    uint64_t *cpreg_indexes;
+    /* Values of the registers (cpreg_indexes[i]'s value is cpreg_values[i]) */
+    uint64_t *cpreg_values;
+    /* Length of the indexes, values, reset_values arrays */
+    int32_t cpreg_array_len;
+    /* These are used only for migration: incoming data arrives in
+     * these fields and is sanity checked in post_load before copying
+     * to the working data structures above.
+     */
+    uint64_t *cpreg_vmstate_indexes;
+    uint64_t *cpreg_vmstate_values;
+    int32_t cpreg_vmstate_array_len;
+
+    /* Timers used by the generic (architected) timer */
+    QEMUTimer *gt_timer[NUM_GTIMERS];
+    /* GPIO outputs for generic timer */
+    qemu_irq gt_timer_outputs[NUM_GTIMERS];
+
+    /* MemoryRegion to use for secure physical accesses */
+    MemoryRegion *secure_memory;
+
+    /* 'compatible' string for this CPU for Linux device trees */
+    const char *dtb_compatible;
+
+    /* PSCI version for this CPU
+     * Bits[31:16] = Major Version
+     * Bits[15:0] = Minor Version
+     */
+    uint32_t psci_version;
+
+    /* Should CPU start in PSCI powered-off state? */
+    bool start_powered_off;
+    /* CPU currently in PSCI powered-off state */
+    bool powered_off;
+    /* CPU has security extension */
+    bool has_el3;
+    /* CPU has PMU (Performance Monitor Unit) */
+    bool has_pmu;
+
+    /* CPU has memory protection unit */
+    bool has_mpu;
+    /* PMSAv7 MPU number of supported regions */
+    uint32_t pmsav7_dregion;
+
+    /* PSCI conduit used to invoke PSCI methods
+     * 0 - disabled, 1 - smc, 2 - hvc
+     */
+    uint32_t psci_conduit;
+
+    /* [QEMU_]KVM_ARM_TARGET_* constant for this CPU, or
+     * QEMU_KVM_ARM_TARGET_NONE if the kernel doesn't support this CPU type.
+     */
+    uint32_t kvm_target;
+
+    /* KVM init features for this CPU */
+    uint32_t kvm_init_features[7];
+
+    /* Uniprocessor system with MP extensions */
+    bool mp_is_up;
+
+    /* The instance init functions for implementation-specific subclasses
+     * set these fields to specify the implementation-dependent values of
+     * various constant registers and reset values of non-constant
+     * registers.
+     * Some of these might become QOM properties eventually.
+     * Field names match the official register names as defined in the
+     * ARMv7AR ARM Architecture Reference Manual. A reset_ prefix
+     * is used for reset values of non-constant registers; no reset_
+     * prefix means a constant register.
+     */
+    uint32_t midr;
+    uint32_t revidr;
+    uint32_t reset_fpsid;
+    uint32_t mvfr0;
+    uint32_t mvfr1;
+    uint32_t mvfr2;
+    uint32_t ctr;
+    uint32_t reset_sctlr;
+    uint32_t id_pfr0;
+    uint32_t id_pfr1;
+    uint32_t id_dfr0;
+    uint32_t pmceid0;
+    uint32_t pmceid1;
+    uint32_t id_afr0;
+    uint32_t id_mmfr0;
+    uint32_t id_mmfr1;
+    uint32_t id_mmfr2;
+    uint32_t id_mmfr3;
+    uint32_t id_mmfr4;
+    uint32_t id_isar0;
+    uint32_t id_isar1;
+    uint32_t id_isar2;
+    uint32_t id_isar3;
+    uint32_t id_isar4;
+    uint32_t id_isar5;
+    uint64_t id_aa64pfr0;
+    uint64_t id_aa64pfr1;
+    uint64_t id_aa64dfr0;
+    uint64_t id_aa64dfr1;
+    uint64_t id_aa64afr0;
+    uint64_t id_aa64afr1;
+    uint64_t id_aa64isar0;
+    uint64_t id_aa64isar1;
+    uint64_t id_aa64mmfr0;
+    uint64_t id_aa64mmfr1;
+    uint32_t dbgdidr;
+    uint32_t clidr;
+    uint64_t mp_affinity; /* MP ID without feature bits */
+    /* The elements of this array are the CCSIDR values for each cache,
+     * in the order L1DCache, L1ICache, L2DCache, L2ICache, etc.
+     */
+    uint32_t ccsidr[16];
+    uint64_t reset_cbar;
+    uint32_t reset_auxcr;
+    bool reset_hivecs;
+    /* DCZ blocksize, in log_2(words), ie low 4 bits of DCZID_EL0 */
+    uint32_t dcz_blocksize;
+    uint64_t rvbar;
+
+    ARMELChangeHook *el_change_hook;
+    void *el_change_hook_opaque;
+};
+
+static inline ARMCPU *arm_env_get_cpu(CPUARMState *env)
+{
+    return container_of(env, ARMCPU, env);
+}
+
+#define ENV_GET_CPU(e) CPU(arm_env_get_cpu(e))
+
+#define ENV_OFFSET offsetof(ARMCPU, env)
+
+#ifndef CONFIG_USER_ONLY
+extern const struct VMStateDescription vmstate_arm_cpu;
+#endif
+
+void arm_cpu_do_interrupt(CPUState *cpu);
+void arm_v7m_cpu_do_interrupt(CPUState *cpu);
+bool arm_cpu_exec_interrupt(CPUState *cpu, int int_req);
+
+void arm_cpu_dump_state(CPUState *cs, FILE *f, fprintf_function cpu_fprintf,
+                        int flags);
+
+hwaddr arm_cpu_get_phys_page_attrs_debug(CPUState *cpu, vaddr addr,
+                                         MemTxAttrs *attrs);
+
+int arm_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int arm_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
+
+int arm_cpu_write_elf64_note(WriteCoreDumpFunction f, CPUState *cs,
+                             int cpuid, void *opaque);
+int arm_cpu_write_elf32_note(WriteCoreDumpFunction f, CPUState *cs,
+                             int cpuid, void *opaque);
+
+#ifdef TARGET_AARCH64
+int aarch64_cpu_gdb_read_register(CPUState *cpu, uint8_t *buf, int reg);
+int aarch64_cpu_gdb_write_register(CPUState *cpu, uint8_t *buf, int reg);
+#endif
 
 ARMCPU *cpu_arm_init(const char *cpu_model);
-int cpu_arm_exec(CPUState *cpu);
 target_ulong do_arm_semihosting(CPUARMState *env);
 void aarch64_sync_32_to_64(CPUARMState *env);
 void aarch64_sync_64_to_32(CPUARMState *env);
@@ -593,6 +780,22 @@ void pmccntr_sync(CPUARMState *env);
 #define CPTR_TCPAC    (1U << 31)
 #define CPTR_TTA      (1U << 20)
 #define CPTR_TFP      (1U << 10)
+
+#define MDCR_EPMAD    (1U << 21)
+#define MDCR_EDAD     (1U << 20)
+#define MDCR_SPME     (1U << 17)
+#define MDCR_SDD      (1U << 16)
+#define MDCR_SPD      (3U << 14)
+#define MDCR_TDRA     (1U << 11)
+#define MDCR_TDOSA    (1U << 10)
+#define MDCR_TDA      (1U << 9)
+#define MDCR_TDE      (1U << 8)
+#define MDCR_HPME     (1U << 7)
+#define MDCR_TPM      (1U << 6)
+#define MDCR_TPMCR    (1U << 5)
+
+/* Not all of the MDCR_EL3 bits are present in the 32-bit SDCR */
+#define SDCR_VALID_MASK (MDCR_EPMAD | MDCR_EDAD | MDCR_SPME | MDCR_SPD)
 
 #define CPSR_M (0x1fU)
 #define CPSR_T (1U << 5)
@@ -706,8 +909,17 @@ static inline void pstate_write(CPUARMState *env, uint32_t val)
 
 /* Return the current CPSR value.  */
 uint32_t cpsr_read(CPUARMState *env);
-/* Set the CPSR.  Note that some bits of mask must be all-set or all-clear.  */
-void cpsr_write(CPUARMState *env, uint32_t val, uint32_t mask);
+
+typedef enum CPSRWriteType {
+    CPSRWriteByInstr = 0,         /* from guest MSR or CPS */
+    CPSRWriteExceptionReturn = 1, /* from guest exception return insn */
+    CPSRWriteRaw = 2,             /* trust values, do not switch reg banks */
+    CPSRWriteByGDBStub = 3,       /* from the GDB stub */
+} CPSRWriteType;
+
+/* Set the CPSR.  Note that some bits of mask must be all-set or all-clear.*/
+void cpsr_write(CPUARMState *env, uint32_t val, uint32_t mask,
+                CPSRWriteType write_type);
 
 /* Return the current xPSR value.  */
 static inline uint32_t xpsr_read(CPUARMState *env)
@@ -912,6 +1124,7 @@ enum arm_features {
     ARM_FEATURE_V8_SHA256, /* implements SHA256 part of v8 Crypto Extensions */
     ARM_FEATURE_V8_PMULL, /* implements PMULL part of v8 Crypto Extensions */
     ARM_FEATURE_THUMB_DSP, /* DSP insns supported in the Thumb encodings */
+    ARM_FEATURE_PMU, /* has PMU support */
 };
 
 static inline int arm_feature(CPUARMState *env, int feature)
@@ -931,15 +1144,15 @@ static inline bool arm_is_secure_below_el3(CPUARMState *env)
     if (arm_feature(env, ARM_FEATURE_EL3)) {
         return !(env->cp15.scr_el3 & SCR_NS);
     } else {
-        /* If EL2 is not supported then the secure state is implementation
+        /* If EL3 is not supported then the secure state is implementation
          * defined, in which case QEMU defaults to non-secure.
          */
         return false;
     }
 }
 
-/* Return true if the processor is in secure state */
-static inline bool arm_is_secure(CPUARMState *env)
+/* Return true if the CPU is AArch64 EL3 or AArch32 Mon */
+static inline bool arm_is_el3_or_mon(CPUARMState *env)
 {
     if (arm_feature(env, ARM_FEATURE_EL3)) {
         if (is_a64(env) && extract32(env->pstate, 2, 2) == 3) {
@@ -950,6 +1163,15 @@ static inline bool arm_is_secure(CPUARMState *env)
             /* CPU currently in AArch32 state and monitor mode */
             return true;
         }
+    }
+    return false;
+}
+
+/* Return true if the processor is in secure state */
+static inline bool arm_is_secure(CPUARMState *env)
+{
+    if (arm_is_el3_or_mon(env)) {
+        return true;
     }
     return arm_is_secure_below_el3(env);
 }
@@ -969,18 +1191,33 @@ static inline bool arm_is_secure(CPUARMState *env)
 /* Return true if the specified exception level is running in AArch64 state. */
 static inline bool arm_el_is_aa64(CPUARMState *env, int el)
 {
-    /* We don't currently support EL2, and this isn't valid for EL0
-     * (if we're in EL0, is_a64() is what you want, and if we're not in EL0
-     * then the state of EL0 isn't well defined.)
+    /* This isn't valid for EL0 (if we're in EL0, is_a64() is what you want,
+     * and if we're not in EL0 then the state of EL0 isn't well defined.)
      */
-    assert(el == 1 || el == 3);
+    assert(el >= 1 && el <= 3);
+    bool aa64 = arm_feature(env, ARM_FEATURE_AARCH64);
 
-    /* AArch64-capable CPUs always run with EL1 in AArch64 mode. This
-     * is a QEMU-imposed simplification which we may wish to change later.
-     * If we in future support EL2 and/or EL3, then the state of lower
-     * exception levels is controlled by the HCR.RW and SCR.RW bits.
+    /* The highest exception level is always at the maximum supported
+     * register width, and then lower levels have a register width controlled
+     * by bits in the SCR or HCR registers.
      */
-    return arm_feature(env, ARM_FEATURE_AARCH64);
+    if (el == 3) {
+        return aa64;
+    }
+
+    if (arm_feature(env, ARM_FEATURE_EL3)) {
+        aa64 = aa64 && (env->cp15.scr_el3 & SCR_RW);
+    }
+
+    if (el == 2) {
+        return aa64;
+    }
+
+    if (arm_feature(env, ARM_FEATURE_EL2) && !arm_is_secure_below_el3(env)) {
+        aa64 = aa64 && (env->cp15.hcr_el2 & HCR_RW);
+    }
+
+    return aa64;
 }
 
 /* Function for determing whether guest cp register reads and writes should
@@ -1239,6 +1476,18 @@ static inline bool cptype_valid(int cptype)
 #define PL1_RW (PL1_R | PL1_W)
 #define PL0_RW (PL0_R | PL0_W)
 
+/* Return the highest implemented Exception Level */
+static inline int arm_highest_el(CPUARMState *env)
+{
+    if (arm_feature(env, ARM_FEATURE_EL3)) {
+        return 3;
+    }
+    if (arm_feature(env, ARM_FEATURE_EL2)) {
+        return 2;
+    }
+    return 1;
+}
+
 /* Return the current Exception Level (as per ARMv8; note that this differs
  * from the ARMv7 Privilege Level).
  */
@@ -1294,6 +1543,11 @@ typedef enum CPAccessResult {
     /* As CP_ACCESS_UNCATEGORIZED, but for traps directly to EL2 or EL3 */
     CP_ACCESS_TRAP_UNCATEGORIZED_EL2 = 5,
     CP_ACCESS_TRAP_UNCATEGORIZED_EL3 = 6,
+    /* Access fails and results in an exception syndrome for an FP access,
+     * trapped directly to EL2 or EL3
+     */
+    CP_ACCESS_TRAP_FP_EL2 = 7,
+    CP_ACCESS_TRAP_FP_EL3 = 8,
 } CPAccessResult;
 
 /* Access functions for coprocessor registers. These cannot fail and
@@ -1303,7 +1557,9 @@ typedef uint64_t CPReadFn(CPUARMState *env, const ARMCPRegInfo *opaque);
 typedef void CPWriteFn(CPUARMState *env, const ARMCPRegInfo *opaque,
                        uint64_t value);
 /* Access permission check functions for coprocessor registers. */
-typedef CPAccessResult CPAccessFn(CPUARMState *env, const ARMCPRegInfo *opaque);
+typedef CPAccessResult CPAccessFn(CPUARMState *env,
+                                  const ARMCPRegInfo *opaque,
+                                  bool isread);
 /* Hook function for register reset */
 typedef void CPResetFn(CPUARMState *env, const ARMCPRegInfo *opaque);
 
@@ -1506,10 +1762,11 @@ bool write_cpustate_to_list(ARMCPU *cpu);
 #if defined(CONFIG_USER_ONLY)
 #define TARGET_PAGE_BITS 12
 #else
-/* The ARM MMU allows 1k pages.  */
-/* ??? Linux doesn't actually use these, and they're deprecated in recent
-   architecture revisions.  Maybe a configure option to disable them.  */
-#define TARGET_PAGE_BITS 10
+/* ARMv7 and later CPUs have 4K pages minimum, but ARMv5 and v6
+ * have to support 1K tiny pages.
+ */
+#define TARGET_PAGE_BITS_VARY
+#define TARGET_PAGE_BITS_MIN 10
 #endif
 
 #if defined(TARGET_AARCH64)
@@ -1630,7 +1887,6 @@ static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
 
 #define cpu_init(cpu_model) CPU(cpu_arm_init(cpu_model))
 
-#define cpu_exec cpu_arm_exec
 #define cpu_signal_handler cpu_arm_signal_handler
 #define cpu_list arm_cpu_list
 
@@ -1720,9 +1976,13 @@ static inline int cpu_mmu_index(CPUARMState *env, bool ifetch)
     return el;
 }
 
-/* Return the Exception Level targeted by debug exceptions;
- * currently always EL1 since we don't implement EL2 or EL3.
- */
+/* Indexes used when registering address spaces with cpu_address_space_init */
+typedef enum ARMASIdx {
+    ARMASIdx_NS = 0,
+    ARMASIdx_S = 1,
+} ARMASIdx;
+
+/* Return the Exception Level targeted by debug exceptions. */
 static inline int arm_debug_target_el(CPUARMState *env)
 {
     bool secure = arm_is_secure(env);
@@ -1745,6 +2005,14 @@ static inline int arm_debug_target_el(CPUARMState *env)
 
 static inline bool aa64_generate_debug_exceptions(CPUARMState *env)
 {
+    if (arm_is_secure(env)) {
+        /* MDCR_EL3.SDD disables debug events from Secure state */
+        if (extract32(env->cp15.mdcr_el3, 16, 1) != 0
+            || arm_current_el(env) == 3) {
+            return false;
+        }
+    }
+
     if (arm_current_el(env) == arm_debug_target_el(env)) {
         if ((extract32(env->cp15.mdscr_el1, 13, 1) == 0)
             || (env->daif & PSTATE_D)) {
@@ -1756,10 +2024,42 @@ static inline bool aa64_generate_debug_exceptions(CPUARMState *env)
 
 static inline bool aa32_generate_debug_exceptions(CPUARMState *env)
 {
-    if (arm_current_el(env) == 0 && arm_el_is_aa64(env, 1)) {
+    int el = arm_current_el(env);
+
+    if (el == 0 && arm_el_is_aa64(env, 1)) {
         return aa64_generate_debug_exceptions(env);
     }
-    return arm_current_el(env) != 2;
+
+    if (arm_is_secure(env)) {
+        int spd;
+
+        if (el == 0 && (env->cp15.sder & 1)) {
+            /* SDER.SUIDEN means debug exceptions from Secure EL0
+             * are always enabled. Otherwise they are controlled by
+             * SDCR.SPD like those from other Secure ELs.
+             */
+            return true;
+        }
+
+        spd = extract32(env->cp15.mdcr_el3, 14, 2);
+        switch (spd) {
+        case 1:
+            /* SPD == 0b01 is reserved, but behaves as 0b00. */
+        case 0:
+            /* For 0b00 we return true if external secure invasive debug
+             * is enabled. On real hardware this is controlled by external
+             * signals to the core. QEMU always permits debug, and behaves
+             * as if DBGEN, SPIDEN, NIDEN and SPNIDEN are all tied high.
+             */
+            return true;
+        case 2:
+            return false;
+        case 3:
+            return true;
+        }
+    }
+
+    return el != 2;
 }
 
 /* Return true if debugging exceptions are currently enabled.
@@ -1795,6 +2095,53 @@ static inline bool arm_singlestep_active(CPUARMState *env)
         && arm_generate_debug_exceptions(env);
 }
 
+static inline bool arm_sctlr_b(CPUARMState *env)
+{
+    return
+        /* We need not implement SCTLR.ITD in user-mode emulation, so
+         * let linux-user ignore the fact that it conflicts with SCTLR_B.
+         * This lets people run BE32 binaries with "-cpu any".
+         */
+#ifndef CONFIG_USER_ONLY
+        !arm_feature(env, ARM_FEATURE_V7) &&
+#endif
+        (env->cp15.sctlr_el[1] & SCTLR_B) != 0;
+}
+
+/* Return true if the processor is in big-endian mode. */
+static inline bool arm_cpu_data_is_big_endian(CPUARMState *env)
+{
+    int cur_el;
+
+    /* In 32bit endianness is determined by looking at CPSR's E bit */
+    if (!is_a64(env)) {
+        return
+#ifdef CONFIG_USER_ONLY
+            /* In system mode, BE32 is modelled in line with the
+             * architecture (as word-invariant big-endianness), where loads
+             * and stores are done little endian but from addresses which
+             * are adjusted by XORing with the appropriate constant. So the
+             * endianness to use for the raw data access is not affected by
+             * SCTLR.B.
+             * In user mode, however, we model BE32 as byte-invariant
+             * big-endianness (because user-only code cannot tell the
+             * difference), and so we need to use a data access endianness
+             * that depends on SCTLR.B.
+             */
+            arm_sctlr_b(env) ||
+#endif
+                ((env->uncached_cpsr & CPSR_E) ? 1 : 0);
+    }
+
+    cur_el = arm_current_el(env);
+
+    if (cur_el == 0) {
+        return (env->cp15.sctlr_el[1] & SCTLR_E0E) != 0;
+    }
+
+    return (env->cp15.sctlr_el[cur_el] & SCTLR_EE) != 0;
+}
+
 #include "exec/cpu-all.h"
 
 /* Bit usage in the TB flags field: bit 31 indicates whether we are
@@ -1825,8 +2172,8 @@ static inline bool arm_singlestep_active(CPUARMState *env)
 #define ARM_TBFLAG_VFPEN_MASK       (1 << ARM_TBFLAG_VFPEN_SHIFT)
 #define ARM_TBFLAG_CONDEXEC_SHIFT   8
 #define ARM_TBFLAG_CONDEXEC_MASK    (0xff << ARM_TBFLAG_CONDEXEC_SHIFT)
-#define ARM_TBFLAG_BSWAP_CODE_SHIFT 16
-#define ARM_TBFLAG_BSWAP_CODE_MASK  (1 << ARM_TBFLAG_BSWAP_CODE_SHIFT)
+#define ARM_TBFLAG_SCTLR_B_SHIFT    16
+#define ARM_TBFLAG_SCTLR_B_MASK     (1 << ARM_TBFLAG_SCTLR_B_SHIFT)
 /* We store the bottom two bits of the CPAR as TB flags and handle
  * checks on the other bits at runtime
  */
@@ -1838,8 +2185,14 @@ static inline bool arm_singlestep_active(CPUARMState *env)
  */
 #define ARM_TBFLAG_NS_SHIFT         19
 #define ARM_TBFLAG_NS_MASK          (1 << ARM_TBFLAG_NS_SHIFT)
+#define ARM_TBFLAG_BE_DATA_SHIFT    20
+#define ARM_TBFLAG_BE_DATA_MASK     (1 << ARM_TBFLAG_BE_DATA_SHIFT)
 
-/* Bit usage when in AArch64 state: currently we have no A64 specific bits */
+/* Bit usage when in AArch64 state */
+#define ARM_TBFLAG_TBI0_SHIFT 0        /* TBI0 for EL0/1 or TBI for EL2/3 */
+#define ARM_TBFLAG_TBI0_MASK (0x1ull << ARM_TBFLAG_TBI0_SHIFT)
+#define ARM_TBFLAG_TBI1_SHIFT 1        /* TBI1 for EL0/1  */
+#define ARM_TBFLAG_TBI1_MASK (0x1ull << ARM_TBFLAG_TBI1_SHIFT)
 
 /* some convenience accessor macros */
 #define ARM_TBFLAG_AARCH64_STATE(F) \
@@ -1862,12 +2215,38 @@ static inline bool arm_singlestep_active(CPUARMState *env)
     (((F) & ARM_TBFLAG_VFPEN_MASK) >> ARM_TBFLAG_VFPEN_SHIFT)
 #define ARM_TBFLAG_CONDEXEC(F) \
     (((F) & ARM_TBFLAG_CONDEXEC_MASK) >> ARM_TBFLAG_CONDEXEC_SHIFT)
-#define ARM_TBFLAG_BSWAP_CODE(F) \
-    (((F) & ARM_TBFLAG_BSWAP_CODE_MASK) >> ARM_TBFLAG_BSWAP_CODE_SHIFT)
+#define ARM_TBFLAG_SCTLR_B(F) \
+    (((F) & ARM_TBFLAG_SCTLR_B_MASK) >> ARM_TBFLAG_SCTLR_B_SHIFT)
 #define ARM_TBFLAG_XSCALE_CPAR(F) \
     (((F) & ARM_TBFLAG_XSCALE_CPAR_MASK) >> ARM_TBFLAG_XSCALE_CPAR_SHIFT)
 #define ARM_TBFLAG_NS(F) \
     (((F) & ARM_TBFLAG_NS_MASK) >> ARM_TBFLAG_NS_SHIFT)
+#define ARM_TBFLAG_BE_DATA(F) \
+    (((F) & ARM_TBFLAG_BE_DATA_MASK) >> ARM_TBFLAG_BE_DATA_SHIFT)
+#define ARM_TBFLAG_TBI0(F) \
+    (((F) & ARM_TBFLAG_TBI0_MASK) >> ARM_TBFLAG_TBI0_SHIFT)
+#define ARM_TBFLAG_TBI1(F) \
+    (((F) & ARM_TBFLAG_TBI1_MASK) >> ARM_TBFLAG_TBI1_SHIFT)
+
+static inline bool bswap_code(bool sctlr_b)
+{
+#ifdef CONFIG_USER_ONLY
+    /* BE8 (SCTLR.B = 0, TARGET_WORDS_BIGENDIAN = 1) is mixed endian.
+     * The invalid combination SCTLR.B=1/CPSR.E=1/TARGET_WORDS_BIGENDIAN=0
+     * would also end up as a mixed-endian mode with BE code, LE data.
+     */
+    return
+#ifdef TARGET_WORDS_BIGENDIAN
+        1 ^
+#endif
+        sctlr_b;
+#else
+    /* All code access in ARM is little endian, and there are no loaders
+     * doing swaps that need to be reversed
+     */
+    return 0;
+#endif
+}
 
 /* Return the exception level to which FP-disabled exceptions should
  * be taken, or 0 if FP is enabled.
@@ -1934,19 +2313,69 @@ static inline int fp_exception_el(CPUARMState *env)
     return 0;
 }
 
-static inline void cpu_get_tb_cpu_state(CPUARMState *env, target_ulong *pc,
-                                        target_ulong *cs_base, int *flags)
+#ifdef CONFIG_USER_ONLY
+static inline bool arm_cpu_bswap_data(CPUARMState *env)
 {
+    return
+#ifdef TARGET_WORDS_BIGENDIAN
+       1 ^
+#endif
+       arm_cpu_data_is_big_endian(env);
+}
+#endif
+
+#ifndef CONFIG_USER_ONLY
+/**
+ * arm_regime_tbi0:
+ * @env: CPUARMState
+ * @mmu_idx: MMU index indicating required translation regime
+ *
+ * Extracts the TBI0 value from the appropriate TCR for the current EL
+ *
+ * Returns: the TBI0 value.
+ */
+uint32_t arm_regime_tbi0(CPUARMState *env, ARMMMUIdx mmu_idx);
+
+/**
+ * arm_regime_tbi1:
+ * @env: CPUARMState
+ * @mmu_idx: MMU index indicating required translation regime
+ *
+ * Extracts the TBI1 value from the appropriate TCR for the current EL
+ *
+ * Returns: the TBI1 value.
+ */
+uint32_t arm_regime_tbi1(CPUARMState *env, ARMMMUIdx mmu_idx);
+#else
+/* We can't handle tagged addresses properly in user-only mode */
+static inline uint32_t arm_regime_tbi0(CPUARMState *env, ARMMMUIdx mmu_idx)
+{
+    return 0;
+}
+
+static inline uint32_t arm_regime_tbi1(CPUARMState *env, ARMMMUIdx mmu_idx)
+{
+    return 0;
+}
+#endif
+
+static inline void cpu_get_tb_cpu_state(CPUARMState *env, target_ulong *pc,
+                                        target_ulong *cs_base, uint32_t *flags)
+{
+    ARMMMUIdx mmu_idx = cpu_mmu_index(env, false);
     if (is_a64(env)) {
         *pc = env->pc;
         *flags = ARM_TBFLAG_AARCH64_STATE_MASK;
+        /* Get control bits for tagged addresses */
+        *flags |= (arm_regime_tbi0(env, mmu_idx) << ARM_TBFLAG_TBI0_SHIFT);
+        *flags |= (arm_regime_tbi1(env, mmu_idx) << ARM_TBFLAG_TBI1_SHIFT);
     } else {
         *pc = env->regs[15];
         *flags = (env->thumb << ARM_TBFLAG_THUMB_SHIFT)
             | (env->vfp.vec_len << ARM_TBFLAG_VECLEN_SHIFT)
             | (env->vfp.vec_stride << ARM_TBFLAG_VECSTRIDE_SHIFT)
             | (env->condexec_bits << ARM_TBFLAG_CONDEXEC_SHIFT)
-            | (env->bswap_code << ARM_TBFLAG_BSWAP_CODE_SHIFT);
+            | (arm_sctlr_b(env) << ARM_TBFLAG_SCTLR_B_SHIFT);
         if (!(access_secure_reg(env))) {
             *flags |= ARM_TBFLAG_NS_MASK;
         }
@@ -1958,7 +2387,8 @@ static inline void cpu_get_tb_cpu_state(CPUARMState *env, target_ulong *pc,
                    << ARM_TBFLAG_XSCALE_CPAR_SHIFT);
     }
 
-    *flags |= (cpu_mmu_index(env, false) << ARM_TBFLAG_MMUIDX_SHIFT);
+    *flags |= (mmu_idx << ARM_TBFLAG_MMUIDX_SHIFT);
+
     /* The SS_ACTIVE and PSTATE_SS bits correspond to the state machine
      * states defined in the ARM ARM for software singlestep:
      *  SS_ACTIVE   PSTATE.SS   State
@@ -1978,17 +2408,59 @@ static inline void cpu_get_tb_cpu_state(CPUARMState *env, target_ulong *pc,
             }
         }
     }
+    if (arm_cpu_data_is_big_endian(env)) {
+        *flags |= ARM_TBFLAG_BE_DATA_MASK;
+    }
     *flags |= fp_exception_el(env) << ARM_TBFLAG_FPEXC_EL_SHIFT;
 
     *cs_base = 0;
 }
-
-#include "exec/exec-all.h"
 
 enum {
     QEMU_PSCI_CONDUIT_DISABLED = 0,
     QEMU_PSCI_CONDUIT_SMC = 1,
     QEMU_PSCI_CONDUIT_HVC = 2,
 };
+
+#ifndef CONFIG_USER_ONLY
+/* Return the address space index to use for a memory access */
+static inline int arm_asidx_from_attrs(CPUState *cs, MemTxAttrs attrs)
+{
+    return attrs.secure ? ARMASIdx_S : ARMASIdx_NS;
+}
+
+/* Return the AddressSpace to use for a memory access
+ * (which depends on whether the access is S or NS, and whether
+ * the board gave us a separate AddressSpace for S accesses).
+ */
+static inline AddressSpace *arm_addressspace(CPUState *cs, MemTxAttrs attrs)
+{
+    return cpu_get_address_space(cs, arm_asidx_from_attrs(cs, attrs));
+}
+#endif
+
+/**
+ * arm_register_el_change_hook:
+ * Register a hook function which will be called back whenever this
+ * CPU changes exception level or mode. The hook function will be
+ * passed a pointer to the ARMCPU and the opaque data pointer passed
+ * to this function when the hook was registered.
+ *
+ * Note that we currently only support registering a single hook function,
+ * and will assert if this function is called twice.
+ * This facility is intended for the use of the GICv3 emulation.
+ */
+void arm_register_el_change_hook(ARMCPU *cpu, ARMELChangeHook *hook,
+                                 void *opaque);
+
+/**
+ * arm_get_el_change_hook_opaque:
+ * Return the opaque data that will be used by the el_change_hook
+ * for this CPU.
+ */
+static inline void *arm_get_el_change_hook_opaque(ARMCPU *cpu)
+{
+    return cpu->el_change_hook_opaque;
+}
 
 #endif

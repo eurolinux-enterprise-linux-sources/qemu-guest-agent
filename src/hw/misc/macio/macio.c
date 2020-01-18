@@ -22,6 +22,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
+#include "qapi/error.h"
 #include "hw/hw.h"
 #include "hw/ppc/mac.h"
 #include "hw/pci/pci.h"
@@ -87,22 +89,16 @@ static void macio_escc_legacy_setup(MacIOState *macio_state)
     MemoryRegion *bar = &macio_state->bar;
     int i;
     static const int maps[] = {
-        0x00, 0x00,
-        0x02, 0x20,
-        0x04, 0x10,
-        0x06, 0x30,
-        0x08, 0x40,
-        0x0A, 0x50,
-        0x60, 0x60,
-        0x70, 0x70,
-        0x80, 0x70,
-        0x90, 0x80,
-        0xA0, 0x90,
-        0xB0, 0xA0,
-        0xC0, 0xB0,
-        0xD0, 0xC0,
-        0xE0, 0xD0,
-        0xF0, 0xE0,
+        0x00, 0x00, /* Command B */
+        0x02, 0x20, /* Command A */
+        0x04, 0x10, /* Data B */
+        0x06, 0x30, /* Data A */
+        0x08, 0x40, /* Enhancement B */
+        0x0A, 0x50, /* Enhancement A */
+        0x80, 0x80, /* Recovery count */
+        0x90, 0x90, /* Start A */
+        0xa0, 0xa0, /* Start B */
+        0xb0, 0xb0, /* Detect AB */
     };
 
     memory_region_init(escc_legacy, OBJECT(macio_state), "escc-legacy", 256);
@@ -252,7 +248,7 @@ static uint64_t timer_read(void *opaque, hwaddr addr, unsigned size)
     uint64_t systime = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t kltime;
 
-    kltime = muldiv64(systime, 4194300, get_ticks_per_sec() * 4);
+    kltime = muldiv64(systime, 4194300, NANOSECONDS_PER_SECOND * 4);
     kltime = muldiv64(kltime, 18432000, 1048575);
 
     switch (addr) {

@@ -8,10 +8,8 @@
  *
  */
 
-#ifndef VHOST_BACKEND_H_
-#define VHOST_BACKEND_H_
-
-#include <stdbool.h>
+#ifndef VHOST_BACKEND_H
+#define VHOST_BACKEND_H
 
 typedef enum VhostBackendType {
     VHOST_BACKEND_TYPE_NONE = 0,
@@ -58,6 +56,8 @@ typedef int (*vhost_set_vring_kick_op)(struct vhost_dev *dev,
                                        struct vhost_vring_file *file);
 typedef int (*vhost_set_vring_call_op)(struct vhost_dev *dev,
                                        struct vhost_vring_file *file);
+typedef int (*vhost_set_vring_busyloop_timeout_op)(struct vhost_dev *dev,
+                                                   struct vhost_vring_state *r);
 typedef int (*vhost_set_features_op)(struct vhost_dev *dev,
                                      uint64_t features);
 typedef int (*vhost_get_features_op)(struct vhost_dev *dev,
@@ -70,6 +70,12 @@ typedef int (*vhost_set_vring_enable_op)(struct vhost_dev *dev,
 typedef bool (*vhost_requires_shm_log_op)(struct vhost_dev *dev);
 typedef int (*vhost_migration_done_op)(struct vhost_dev *dev,
                                        char *mac_addr);
+typedef bool (*vhost_backend_can_merge_op)(struct vhost_dev *dev,
+                                           uint64_t start1, uint64_t size1,
+                                           uint64_t start2, uint64_t size2);
+typedef int (*vhost_vsock_set_guest_cid_op)(struct vhost_dev *dev,
+                                            uint64_t guest_cid);
+typedef int (*vhost_vsock_set_running_op)(struct vhost_dev *dev, int start);
 
 typedef struct VhostOps {
     VhostBackendType backend_type;
@@ -89,6 +95,7 @@ typedef struct VhostOps {
     vhost_get_vring_base_op vhost_get_vring_base;
     vhost_set_vring_kick_op vhost_set_vring_kick;
     vhost_set_vring_call_op vhost_set_vring_call;
+    vhost_set_vring_busyloop_timeout_op vhost_set_vring_busyloop_timeout;
     vhost_set_features_op vhost_set_features;
     vhost_get_features_op vhost_get_features;
     vhost_set_owner_op vhost_set_owner;
@@ -97,6 +104,9 @@ typedef struct VhostOps {
     vhost_set_vring_enable_op vhost_set_vring_enable;
     vhost_requires_shm_log_op vhost_requires_shm_log;
     vhost_migration_done_op vhost_migration_done;
+    vhost_backend_can_merge_op vhost_backend_can_merge;
+    vhost_vsock_set_guest_cid_op vhost_vsock_set_guest_cid;
+    vhost_vsock_set_running_op vhost_vsock_set_running;
 } VhostOps;
 
 extern const VhostOps user_ops;
@@ -104,4 +114,4 @@ extern const VhostOps user_ops;
 int vhost_set_backend_type(struct vhost_dev *dev,
                            VhostBackendType backend_type);
 
-#endif /* VHOST_BACKEND_H_ */
+#endif /* VHOST_BACKEND_H */

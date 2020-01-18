@@ -7,6 +7,7 @@
  * See the COPYING file in the top-level directory.
  */
 
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 
 #include "trace.h"
@@ -168,6 +169,7 @@ void gd_gl_area_destroy_context(DisplayChangeListener *dcl, QEMUGLContext ctx)
 
 void gd_gl_area_scanout(DisplayChangeListener *dcl,
                         uint32_t backing_id, bool backing_y_0_top,
+                        uint32_t backing_width, uint32_t backing_height,
                         uint32_t x, uint32_t y,
                         uint32_t w, uint32_t h)
 {

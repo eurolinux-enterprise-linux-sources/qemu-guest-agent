@@ -17,8 +17,7 @@
  * bugs around here.
  */
 
-#include <glib.h>
-#include <stdarg.h>
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qapi/qmp/qstring.h"
 #include "libqtest.h"

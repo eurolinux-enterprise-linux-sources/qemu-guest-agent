@@ -5,8 +5,9 @@
  * terms and conditions of the copyright.
  */
 
-#include <slirp.h>
-#include <qemu/main-loop.h>
+#include "qemu/osdep.h"
+#include "slirp.h"
+#include "qemu/main-loop.h"
 
 static void sbappendsb(struct sbuf *sb, struct mbuf *m);
 

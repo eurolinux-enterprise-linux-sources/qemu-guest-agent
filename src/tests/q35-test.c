@@ -9,12 +9,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include <glib.h>
-#include <string.h>
+#include "qemu/osdep.h"
 #include "libqtest.h"
 #include "libqos/pci.h"
 #include "libqos/pci-pc.h"
-#include "qemu/osdep.h"
 #include "hw/pci-host/q35.h"
 
 static void smram_set_bit(QPCIDevice *pcidev, uint8_t mask, bool enabled)
@@ -44,7 +42,7 @@ static void test_smram_lock(void)
     QPCIDevice *pcidev;
     QDict *response;
 
-    pcibus = qpci_init_pc();
+    pcibus = qpci_init_pc(NULL);
     g_assert(pcibus != NULL);
 
     pcidev = qpci_device_find(pcibus, 0);

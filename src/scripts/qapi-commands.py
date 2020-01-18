@@ -2,7 +2,7 @@
 # QAPI command marshaller generator
 #
 # Copyright IBM, Corp. 2011
-# Copyright (C) 2014-2015 Red Hat, Inc.
+# Copyright (C) 2014-2016 Red Hat, Inc.
 #
 # Authors:
 #  Anthony Liguori <aliguori@us.ibm.com>
@@ -16,24 +16,28 @@ from qapi import *
 import re
 
 
-def gen_command_decl(name, arg_type, ret_type):
+def gen_command_decl(name, arg_type, boxed, ret_type):
     return mcgen('''
 %(c_type)s qmp_%(c_name)s(%(params)s);
 ''',
                  c_type=(ret_type and ret_type.c_type()) or 'void',
                  c_name=c_name(name),
-                 params=gen_params(arg_type, 'Error **errp'))
+                 params=gen_params(arg_type, boxed, 'Error **errp'))
 
 
-def gen_call(name, arg_type, ret_type):
+def gen_call(name, arg_type, boxed, ret_type):
     ret = ''
 
     argstr = ''
-    if arg_type:
+    if boxed:
+        assert arg_type and not arg_type.is_empty()
+        argstr = '&arg, '
+    elif arg_type:
+        assert not arg_type.variants
         for memb in arg_type.members:
             if memb.optional:
-                argstr += 'has_%s, ' % c_name(memb.name)
-            argstr += '%s, ' % c_name(memb.name)
+                argstr += 'arg.has_%s, ' % c_name(memb.name)
+            argstr += 'arg.%s, ' % c_name(memb.name)
 
     lhs = ''
     if ret_type:
@@ -45,78 +49,14 @@ def gen_call(name, arg_type, ret_type):
 ''',
                 c_name=c_name(name), args=argstr, lhs=lhs)
     if ret_type:
-        ret += gen_err_check()
         ret += mcgen('''
+    if (err) {
+        goto out;
+    }
 
     qmp_marshal_output_%(c_name)s(retval, ret, &err);
 ''',
                      c_name=ret_type.c_name())
-    return ret
-
-
-def gen_marshal_vars(arg_type, ret_type):
-    ret = mcgen('''
-    Error *err = NULL;
-''')
-
-    if ret_type:
-        ret += mcgen('''
-    %(c_type)s retval;
-''',
-                     c_type=ret_type.c_type())
-
-    if arg_type:
-        ret += mcgen('''
-    QmpInputVisitor *qiv = qmp_input_visitor_new_strict(QOBJECT(args));
-    QapiDeallocVisitor *qdv;
-    Visitor *v;
-''')
-
-        for memb in arg_type.members:
-            if memb.optional:
-                ret += mcgen('''
-    bool has_%(c_name)s = false;
-''',
-                             c_name=c_name(memb.name))
-            ret += mcgen('''
-    %(c_type)s %(c_name)s = %(c_null)s;
-''',
-                         c_name=c_name(memb.name),
-                         c_type=memb.type.c_type(),
-                         c_null=memb.type.c_null())
-        ret += '\n'
-    else:
-        ret += mcgen('''
-
-    (void)args;
-''')
-
-    return ret
-
-
-def gen_marshal_input_visit(arg_type, dealloc=False):
-    ret = ''
-
-    if not arg_type:
-        return ret
-
-    if dealloc:
-        ret += mcgen('''
-    qmp_input_visitor_cleanup(qiv);
-    qdv = qapi_dealloc_visitor_new();
-    v = qapi_dealloc_get_visitor(qdv);
-''')
-    else:
-        ret += mcgen('''
-    v = qmp_input_get_visitor(qiv);
-''')
-
-    ret += gen_visit_fields(arg_type.members, skiperr=dealloc)
-
-    if dealloc:
-        ret += mcgen('''
-    qapi_dealloc_visitor_cleanup(qdv);
-''')
     return ret
 
 
@@ -126,34 +66,25 @@ def gen_marshal_output(ret_type):
 static void qmp_marshal_output_%(c_name)s(%(c_type)s ret_in, QObject **ret_out, Error **errp)
 {
     Error *err = NULL;
-    QmpOutputVisitor *qov = qmp_output_visitor_new();
-    QapiDeallocVisitor *qdv;
     Visitor *v;
 
-    v = qmp_output_get_visitor(qov);
-    visit_type_%(c_name)s(v, &ret_in, "unused", &err);
-    if (err) {
-        goto out;
+    v = qobject_output_visitor_new(ret_out);
+    visit_type_%(c_name)s(v, "unused", &ret_in, &err);
+    if (!err) {
+        visit_complete(v, ret_out);
     }
-    *ret_out = qmp_output_get_qobject(qov);
-
-out:
     error_propagate(errp, err);
-    qmp_output_visitor_cleanup(qov);
-    qdv = qapi_dealloc_visitor_new();
-    v = qapi_dealloc_get_visitor(qdv);
-    visit_type_%(c_name)s(v, &ret_in, "unused", NULL);
-    qapi_dealloc_visitor_cleanup(qdv);
+    visit_free(v);
+    v = qapi_dealloc_visitor_new();
+    visit_type_%(c_name)s(v, "unused", &ret_in, NULL);
+    visit_free(v);
 }
 ''',
                  c_type=ret_type.c_type(), c_name=ret_type.c_name())
 
 
 def gen_marshal_proto(name):
-    ret = 'void qmp_marshal_%s(QDict *args, QObject **ret, Error **errp)' % c_name(name)
-    if not middle_mode:
-        ret = 'static ' + ret
-    return ret
+    return 'void qmp_marshal_%s(QDict *args, QObject **ret, Error **errp)' % c_name(name)
 
 
 def gen_marshal_decl(name):
@@ -163,29 +94,98 @@ def gen_marshal_decl(name):
                  proto=gen_marshal_proto(name))
 
 
-def gen_marshal(name, arg_type, ret_type):
+def gen_marshal(name, arg_type, boxed, ret_type):
+    have_args = arg_type and not arg_type.is_empty()
+
     ret = mcgen('''
 
 %(proto)s
 {
+    Error *err = NULL;
 ''',
                 proto=gen_marshal_proto(name))
 
-    ret += gen_marshal_vars(arg_type, ret_type)
-    ret += gen_marshal_input_visit(arg_type)
-    ret += gen_call(name, arg_type, ret_type)
-
-    # 'goto out' produced by gen_marshal_input_visit->gen_visit_fields()
-    # for each arg_type member, and by gen_call() for ret_type
-    if (arg_type and arg_type.members) or ret_type:
+    if ret_type:
         ret += mcgen('''
+    %(c_type)s retval;
+''',
+                     c_type=ret_type.c_type())
+
+    if have_args:
+        visit_members = ('visit_type_%s_members(v, &arg, &err);'
+                         % arg_type.c_name())
+        ret += mcgen('''
+    Visitor *v;
+    %(c_name)s arg = {0};
+
+''',
+                     c_name=arg_type.c_name())
+    else:
+        visit_members = ''
+        ret += mcgen('''
+    Visitor *v = NULL;
+
+    if (args) {
+''')
+        push_indent()
+
+    ret += mcgen('''
+    v = qobject_input_visitor_new(QOBJECT(args), true);
+    visit_start_struct(v, NULL, NULL, 0, &err);
+    if (err) {
+        goto out;
+    }
+    %(visit_members)s
+    if (!err) {
+        visit_check_struct(v, &err);
+    }
+    visit_end_struct(v, NULL);
+    if (err) {
+        goto out;
+    }
+''',
+                 visit_members=visit_members)
+
+    if not have_args:
+        pop_indent()
+        ret += mcgen('''
+    }
+''')
+
+    ret += gen_call(name, arg_type, boxed, ret_type)
+
+    ret += mcgen('''
 
 out:
-''')
-    ret += mcgen('''
     error_propagate(errp, err);
+    visit_free(v);
 ''')
-    ret += gen_marshal_input_visit(arg_type, dealloc=True)
+
+    if have_args:
+        visit_members = ('visit_type_%s_members(v, &arg, NULL);'
+                         % arg_type.c_name())
+    else:
+        visit_members = ''
+        ret += mcgen('''
+    if (args) {
+''')
+        push_indent()
+
+    ret += mcgen('''
+    v = qapi_dealloc_visitor_new();
+    visit_start_struct(v, NULL, NULL, 0, NULL);
+    %(visit_members)s
+    visit_end_struct(v, NULL);
+    visit_free(v);
+''',
+                 visit_members=visit_members)
+
+    if not have_args:
+        pop_indent()
+        ret += mcgen('''
+    }
+''')
+
     ret += mcgen('''
 }
 ''')
@@ -234,34 +234,24 @@ class QAPISchemaGenCommandVisitor(QAPISchemaVisitor):
         self._visited_ret_types = set()
 
     def visit_end(self):
-        if not middle_mode:
-            self.defn += gen_registry(self._regy)
+        self.defn += gen_registry(self._regy)
         self._regy = None
         self._visited_ret_types = None
 
     def visit_command(self, name, info, arg_type, ret_type,
-                      gen, success_response):
+                      gen, success_response, boxed):
         if not gen:
             return
-        self.decl += gen_command_decl(name, arg_type, ret_type)
+        self.decl += gen_command_decl(name, arg_type, boxed, ret_type)
         if ret_type and ret_type not in self._visited_ret_types:
             self._visited_ret_types.add(ret_type)
             self.defn += gen_marshal_output(ret_type)
-        if middle_mode:
-            self.decl += gen_marshal_decl(name)
-        self.defn += gen_marshal(name, arg_type, ret_type)
-        if not middle_mode:
-            self._regy += gen_register_command(name, success_response)
+        self.decl += gen_marshal_decl(name)
+        self.defn += gen_marshal(name, arg_type, boxed, ret_type)
+        self._regy += gen_register_command(name, success_response)
 
 
-middle_mode = False
-
-(input_file, output_dir, do_c, do_h, prefix, opts) = \
-    parse_command_line("m", ["middle"])
-
-for o, a in opts:
-    if o in ("-m", "--middle"):
-        middle_mode = True
+(input_file, output_dir, do_c, do_h, prefix, opts) = parse_command_line()
 
 c_comment = '''
 /*
@@ -297,13 +287,14 @@ h_comment = '''
                             c_comment, h_comment)
 
 fdef.write(mcgen('''
+#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/module.h"
 #include "qapi/qmp/types.h"
 #include "qapi/qmp/dispatch.h"
 #include "qapi/visitor.h"
-#include "qapi/qmp-output-visitor.h"
-#include "qapi/qmp-input-visitor.h"
+#include "qapi/qobject-output-visitor.h"
+#include "qapi/qobject-input-visitor.h"
 #include "qapi/dealloc-visitor.h"
 #include "%(prefix)sqapi-types.h"
 #include "%(prefix)sqapi-visit.h"

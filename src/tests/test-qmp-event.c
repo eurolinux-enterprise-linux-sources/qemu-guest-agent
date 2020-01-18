@@ -11,8 +11,7 @@
  *
  */
 
-#include <glib.h>
-#include <stdarg.h>
+#include "qemu/osdep.h"
 
 #include "qemu-common.h"
 #include "test-qapi-types.h"

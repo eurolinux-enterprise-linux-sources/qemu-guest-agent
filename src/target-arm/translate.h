@@ -16,11 +16,14 @@ typedef struct DisasContext {
     struct TranslationBlock *tb;
     int singlestep_enabled;
     int thumb;
-    int bswap_code;
+    int sctlr_b;
+    TCGMemOp be_data;
 #if !defined(CONFIG_USER_ONLY)
     int user;
 #endif
     ARMMMUIdx mmu_idx; /* MMU index to use for normal loads/stores */
+    bool tbi0;         /* TBI0 for EL0/1 or TBI for EL2/3 */
+    bool tbi1;         /* TBI1 for EL0/1, not used for EL2/3 */
     bool ns;        /* Use non-secure CPREG bank on access */
     int fp_excp_el; /* FP exception EL or 0 if enabled */
     /* Flag indicating that exceptions from secure mode are routed to EL3. */
@@ -58,6 +61,8 @@ typedef struct DisasContext {
     bool ss_same_el;
     /* Bottom two bits of XScale c15_cpar coprocessor access control reg */
     int c15_cpar;
+    /* TCG op index of the current insn_start.  */
+    int insn_start_idx;
 #define TMP_A64_MAX 16
     int tmp_a64_count;
     TCGv_i64 tmp_a64[TMP_A64_MAX];
@@ -70,14 +75,10 @@ typedef struct DisasCompare {
 } DisasCompare;
 
 /* Share the TCG temporaries common between 32 and 64 bit modes.  */
-extern TCGv_ptr cpu_env;
+extern TCGv_env cpu_env;
 extern TCGv_i32 cpu_NF, cpu_ZF, cpu_CF, cpu_VF;
 extern TCGv_i64 cpu_exclusive_addr;
 extern TCGv_i64 cpu_exclusive_val;
-#ifdef CONFIG_USER_ONLY
-extern TCGv_i64 cpu_exclusive_test;
-extern TCGv_i32 cpu_exclusive_info;
-#endif
 
 static inline int arm_dc_feature(DisasContext *dc, int feature)
 {

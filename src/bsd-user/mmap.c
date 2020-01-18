@@ -16,13 +16,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
-#include <sys/mman.h>
+#include "qemu/osdep.h"
 
 #include "qemu.h"
 #include "qemu-common.h"
@@ -46,6 +40,11 @@ void mmap_unlock(void)
     if (--mmap_lock_count == 0) {
         pthread_mutex_unlock(&mmap_mutex);
     }
+}
+
+bool have_mmap_lock(void)
+{
+    return mmap_lock_count > 0 ? true : false;
 }
 
 /* Grab lock to make sure things are in a consistent state after fork().  */

@@ -417,56 +417,6 @@ CONSTANT scsi-length-mode-sense-10-data
 ;
 
 \ ***************************************************************************
-\ SCSI-Command: READ (6)
-\         Type: Block Command (SBC-3 clause 5.7)
-\ ***************************************************************************
-\ Forth Word:   scsi-build-read-6  ( block# #blocks cdb -- )
-\ ***************************************************************************
-\ this SCSI command uses 21 bits to represent start LBA
-\ and 8 bits to specify the numbers of blocks to read
-\ The value of 0 blocks is interpreted as 256 blocks
-\
-\ command code
-08 CONSTANT scsi-cmd-read-6
-
-\ CDB structure
-STRUCT
-   /c FIELD read-6>operation-code      \ 08h
-   /c FIELD read-6>block-address-msb   \ upper 5 bits
-   /w FIELD read-6>block-address       \ lower 16 bits
-   /c FIELD read-6>length              \ number of blocks to read
-   /c FIELD read-6>control             \ CDB control
-CONSTANT scsi-length-read-6
-
-: scsi-build-read-6                    ( block# #blocks cdb -- )
-   >r                                  ( block# #blocks ) ( R: -- cdb )
-   r@ scsi-length-read-6 erase         \ 6 bytes CDB
-	scsi-cmd-read-6 r@ read-6>operation-code c! ( block# #blocks )
-
-   \ check block count to read (#blocks)
-   dup d# 255 >                        \ #blocks exceeded limit ?
-   IF
-      scsi-inc-errors
-      drop 1                           \ replace with any valid number
-   THEN
-   r@ read-6>length c!                 \ set #blocks to read
-
-   \ check starting block number (block#)
-   dup 1fffff >                        \ check address upper limit
-   IF
-      scsi-inc-errors
-      drop                             \ remove original block#
-      1fffff                           \ replace with any valid address
-   THEN
-   dup d# 16 rshift
-   r@ read-6>block-address-msb c!      \ set upper 5 bits
-   ffff and
-   r@ read-6>block-address w!                \ set lower 16 bits
-   scsi-param-control r> read-6>control c!   ( R: cdb -- )
-   scsi-length-read-6 to scsi-param-size     \ update CDB length
-;
-
-\ ***************************************************************************
 \ SCSI-Command: READ (10)
 \         Type: Block Command (SBC-3 clause 5.8)
 \ ***************************************************************************
@@ -522,6 +472,35 @@ CONSTANT scsi-length-read-12
    r@ read-12>block-address l!               (  )
    scsi-param-control r> read-12>control c!  ( R: cdb -- )
    scsi-length-read-12 to scsi-param-size    \ update CDB length
+;
+
+\ ***************************************************************************
+\ SCSI-Command: READ (16)
+\         Type: Block Command
+\ ***************************************************************************
+\ Forth Word:   scsi-build-read-16  ( block# #blocks cdb -- )
+\ ***************************************************************************
+\ command code
+88 CONSTANT scsi-cmd-read-16
+
+\ CDB structure
+STRUCT
+   /c FIELD read-16>operation-code     \ code: 88
+   /c FIELD read-16>protect            \ RDPROTECT, DPO, FUA, FUA_NV
+   /x FIELD read-16>block-address      \ lba
+   /l FIELD read-16>length             \ transfer length (32bits)
+   /c FIELD read-16>group              \ group number
+   /c FIELD read-16>control
+CONSTANT scsi-length-read-16
+
+: scsi-build-read-16                         ( block# #blocks cdb -- )
+   >r                                        ( block# #blocks )  ( R: -- cdb )
+   r@ scsi-length-read-16 erase              \ 16 bytes CDB
+   scsi-cmd-read-16 r@ read-16>operation-code c! ( block# #blocks )
+   r@ read-16>length l!                      ( block# )
+   r@ read-16>block-address x!               (  )
+   scsi-param-control r> read-16>control c!  ( R: cdb -- )
+   scsi-length-read-16 to scsi-param-size    \ update CDB length
 ;
 
 \ ***************************************************************************

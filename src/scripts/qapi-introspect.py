@@ -1,7 +1,7 @@
 #
 # QAPI introspection generator
 #
-# Copyright (C) 2015 Red Hat, Inc.
+# Copyright (C) 2015-2016 Red Hat, Inc.
 #
 # Authors:
 #  Markus Armbruster <armbru@redhat.com>
@@ -154,14 +154,14 @@ const char %(c_name)s[] = %(c_string)s;
                                     for m in variants.variants]})
 
     def visit_command(self, name, info, arg_type, ret_type,
-                      gen, success_response):
+                      gen, success_response, boxed):
         arg_type = arg_type or self._schema.the_empty_object_type
         ret_type = ret_type or self._schema.the_empty_object_type
         self._gen_json(name, 'command',
                        {'arg-type': self._use_type(arg_type),
                         'ret-type': self._use_type(ret_type)})
 
-    def visit_event(self, name, info, arg_type):
+    def visit_event(self, name, info, arg_type, boxed):
         arg_type = arg_type or self._schema.the_empty_object_type
         self._gen_json(name, 'event', {'arg-type': self._use_type(arg_type)})
 
@@ -204,6 +204,7 @@ h_comment = '''
                             c_comment, h_comment)
 
 fdef.write(mcgen('''
+#include "qemu/osdep.h"
 #include "%(prefix)sqmp-introspect.h"
 
 ''',

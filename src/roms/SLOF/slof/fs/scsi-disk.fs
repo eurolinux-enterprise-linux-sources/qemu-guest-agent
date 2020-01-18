@@ -82,7 +82,12 @@ CREATE cdb 10 allot
     >r rot r> 			                ( block# #blocks addr len )
     2swap                                       ( addr len block# #blocks )
     dup >r
-    cdb scsi-build-read-10                      ( addr len )
+    cdb                                         ( addr len block# #blocks cdb )
+    max-block-num FFFFFFFF > IF
+        scsi-build-read-16                      ( addr len )
+    ELSE
+        scsi-build-read-10                      ( addr len )
+    THEN
     r> -rot                                     ( #blocks addr len )
     scsi-dir-read cdb scsi-param-size 10
     retry-scsi-command
@@ -119,6 +124,20 @@ CREATE cdb 10 allot
     \ Success ?
     dup 0<> IF " read-capacity" dump-scsi-error 0 0 EXIT THEN
     drop scratch scsi-get-capacity-10 1 +
+;
+
+: read-capacity-16 ( -- blocksize #blocks )
+    \ Now issue the read-capacity-16 command
+    scsi-disk-debug? IF
+        ." SCSI-DISK: read-capacity-16 " .s cr
+    THEN
+    \ Make sure that there are zeros in the buffer in case something goes wrong:
+    scratch scsi-length-read-cap-16-data erase
+    cdb scsi-build-read-cap-16 scratch scsi-length-read-cap-16-data scsi-dir-read
+    cdb scsi-param-size 1 retry-scsi-command
+    \ Success ?
+    dup 0<> IF " read-capacity-16" dump-scsi-error 0 0 EXIT THEN
+    drop scratch scsi-get-capacity-16 1 +
 ;
 
 100 CONSTANT test-unit-retries
@@ -293,6 +312,11 @@ CREATE cdb 10 allot
     " max-transfer" $call-parent to max-transfer
 
     read-capacity to max-block-num to block-size
+    \ Check if read-capacity-10 hit the maximum value 0xFFFF.FFFF
+    max-block-num 100000000 = IF
+        read-capacity-16 to max-block-num to block-size
+    THEN
+
     max-block-num 0= block-size 0= OR IF
        ." SCSI-DISK: Failed to get disk capacity!" cr
        FALSE EXIT

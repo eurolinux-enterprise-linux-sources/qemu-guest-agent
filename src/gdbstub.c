@@ -16,17 +16,11 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
-#include "config.h"
-#include "qemu-common.h"
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qemu/cutils.h"
+#include "cpu.h"
 #ifdef CONFIG_USER_ONLY
-#include <stdlib.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
-
 #include "qemu.h"
 #else
 #include "monitor/monitor.h"
@@ -37,10 +31,10 @@
 
 #define MAX_PACKET_LENGTH 4096
 
-#include "cpu.h"
 #include "qemu/sockets.h"
 #include "sysemu/kvm.h"
 #include "exec/semihost.h"
+#include "exec/exec-all.h"
 
 #ifdef CONFIG_USER_ONLY
 #define GDB_ATTACHED "0"
@@ -308,7 +302,7 @@ typedef struct GDBState {
     int fd;
     int running_state;
 #else
-    CharDriverState *chr;
+    CharBackend chr;
     CharDriverState *mon_chr;
 #endif
     char syscall_buf[256];
@@ -338,7 +332,7 @@ static int get_char(GDBState *s)
         if (ret < 0) {
             if (errno == ECONNRESET)
                 s->fd = -1;
-            if (errno != EINTR && errno != EAGAIN)
+            if (errno != EINTR)
                 return -1;
         } else if (ret == 0) {
             close(s->fd);
@@ -399,7 +393,7 @@ static void put_buffer(GDBState *s, const uint8_t *buf, int len)
     while (len > 0) {
         ret = send(s->fd, buf, len, 0);
         if (ret < 0) {
-            if (errno != EINTR && errno != EAGAIN)
+            if (errno != EINTR)
                 return;
         } else {
             buf += ret;
@@ -407,7 +401,9 @@ static void put_buffer(GDBState *s, const uint8_t *buf, int len)
         }
     }
 #else
-    qemu_chr_fe_write(s->chr, buf, len);
+    /* XXX this blocks entire thread. Rewrite to use
+     * qemu_chr_fe_write and background I/O callbacks */
+    qemu_chr_fe_write_all(&s->chr, buf, len);
 #endif
 }
 
@@ -540,13 +536,20 @@ static const char *get_feature_xml(const char *p, const char **newp,
             GDBRegisterState *r;
             CPUState *cpu = first_cpu;
 
-            snprintf(target_xml, sizeof(target_xml),
-                     "<?xml version=\"1.0\"?>"
-                     "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">"
-                     "<target>"
-                     "<xi:include href=\"%s\"/>",
-                     cc->gdb_core_xml_file);
-
+            pstrcat(target_xml, sizeof(target_xml),
+                    "<?xml version=\"1.0\"?>"
+                    "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">"
+                    "<target>");
+            if (cc->gdb_arch_name) {
+                gchar *arch = cc->gdb_arch_name(cpu);
+                pstrcat(target_xml, sizeof(target_xml), "<architecture>");
+                pstrcat(target_xml, sizeof(target_xml), arch);
+                pstrcat(target_xml, sizeof(target_xml), "</architecture>");
+                g_free(arch);
+            }
+            pstrcat(target_xml, sizeof(target_xml), "<xi:include href=\"");
+            pstrcat(target_xml, sizeof(target_xml), cc->gdb_core_xml_file);
+            pstrcat(target_xml, sizeof(target_xml), "\"/>");
             for (r = cpu->gdb_regs; r; r = r->next) {
                 pstrcat(target_xml, sizeof(target_xml), "<xi:include href=\"");
                 pstrcat(target_xml, sizeof(target_xml), r->xml);
@@ -1467,6 +1470,9 @@ void gdb_exit(CPUArchState *env, int code)
 {
   GDBState *s;
   char buf[4];
+#ifndef CONFIG_USER_ONLY
+  CharDriverState *chr;
+#endif
 
   s = gdbserver_state;
   if (!s) {
@@ -1477,7 +1483,8 @@ void gdb_exit(CPUArchState *env, int code)
       return;
   }
 #else
-  if (!s->chr) {
+  chr = qemu_chr_fe_get_driver(&s->chr);
+  if (!chr) {
       return;
   }
 #endif
@@ -1486,24 +1493,12 @@ void gdb_exit(CPUArchState *env, int code)
   put_packet(s, buf);
 
 #ifndef CONFIG_USER_ONLY
-  qemu_chr_delete(s->chr);
+  qemu_chr_fe_deinit(&s->chr);
+  qemu_chr_delete(chr);
 #endif
 }
 
 #ifdef CONFIG_USER_ONLY
-int
-gdb_queuesig (void)
-{
-    GDBState *s;
-
-    s = gdbserver_state;
-
-    if (gdbserver_fd < 0 || s->fd < 0)
-        return 0;
-    else
-        return 1;
-}
-
 int
 gdb_handlesig(CPUState *cpu, int sig)
 {
@@ -1541,9 +1536,13 @@ gdb_handlesig(CPUState *cpu, int sig)
             for (i = 0; i < n; i++) {
                 gdb_read_byte(s, buf[i]);
             }
-        } else if (n == 0 || errno != EAGAIN) {
+        } else {
             /* XXX: Connection closed.  Should probably wait for another
                connection before continuing.  */
+            if (n == 0) {
+                close(s->fd);
+            }
+            s->fd = -1;
             return sig;
         }
     }
@@ -1598,8 +1597,6 @@ static void gdb_accept(void)
     gdb_has_xml = false;
 
     gdbserver_state = s;
-
-    fcntl(fd, F_SETFL, O_NONBLOCK);
 }
 
 static int gdbserver_open(int port)
@@ -1627,7 +1624,7 @@ static int gdbserver_open(int port)
         close(fd);
         return -1;
     }
-    ret = listen(fd, 0);
+    ret = listen(fd, 1);
     if (ret < 0) {
         perror("listen");
         close(fd);
@@ -1732,6 +1729,7 @@ int gdbserver_start(const char *device)
     char gdbstub_device_name[128];
     CharDriverState *chr = NULL;
     CharDriverState *mon_chr;
+    ChardevCommon common = { 0 };
 
     if (!device)
         return -1;
@@ -1751,13 +1749,9 @@ int gdbserver_start(const char *device)
             sigaction(SIGINT, &act, NULL);
         }
 #endif
-        chr = qemu_chr_new("gdb", device, NULL);
+        chr = qemu_chr_new_noreplay("gdb", device);
         if (!chr)
             return -1;
-
-        qemu_chr_fe_claim_no_fail(chr);
-        qemu_chr_add_handlers(chr, gdb_chr_can_receive, gdb_chr_receive,
-                              gdb_chr_event, NULL);
     }
 
     s = gdbserver_state;
@@ -1768,18 +1762,24 @@ int gdbserver_start(const char *device)
         qemu_add_vm_change_state_handler(gdb_vm_state_change, NULL);
 
         /* Initialize a monitor terminal for gdb */
-        mon_chr = qemu_chr_alloc();
+        mon_chr = qemu_chr_alloc(&common, &error_abort);
         mon_chr->chr_write = gdb_monitor_write;
         monitor_init(mon_chr, 0);
     } else {
-        if (s->chr)
-            qemu_chr_delete(s->chr);
+        if (qemu_chr_fe_get_driver(&s->chr)) {
+            qemu_chr_delete(qemu_chr_fe_get_driver(&s->chr));
+        }
         mon_chr = s->mon_chr;
         memset(s, 0, sizeof(GDBState));
+        s->mon_chr = mon_chr;
     }
     s->c_cpu = first_cpu;
     s->g_cpu = first_cpu;
-    s->chr = chr;
+    if (chr) {
+        qemu_chr_fe_init(&s->chr, chr, &error_abort);
+        qemu_chr_fe_set_handlers(&s->chr, gdb_chr_can_receive, gdb_chr_receive,
+                                 gdb_chr_event, NULL, NULL, true);
+    }
     s->state = chr ? RS_IDLE : RS_INACTIVE;
     s->mon_chr = mon_chr;
     s->current_syscall_cb = NULL;

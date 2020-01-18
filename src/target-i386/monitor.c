@@ -21,6 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "monitor/monitor.h"
 #include "monitor/hmp-target.h"
@@ -503,7 +504,8 @@ void hmp_info_local_apic(Monitor *mon, const QDict *qdict)
 
 void hmp_info_io_apic(Monitor *mon, const QDict *qdict)
 {
-    if (kvm_irqchip_in_kernel()) {
+    if (kvm_irqchip_in_kernel() &&
+        !kvm_irqchip_is_split()) {
         kvm_ioapic_dump_state(mon, qdict);
     } else {
         ioapic_dump_state(mon, qdict);

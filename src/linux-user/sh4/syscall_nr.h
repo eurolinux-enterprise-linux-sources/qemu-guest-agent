@@ -84,7 +84,7 @@
 #define TARGET_NR_settimeofday	 79
 #define TARGET_NR_getgroups		 80
 #define TARGET_NR_setgroups		 81
-#define TARGET_NR_select		 82
+                                         /* 82 was sys_oldselect */
 #define TARGET_NR_symlink		 83
 #define TARGET_NR_oldlstat		 84
 #define TARGET_NR_readlink		 85
@@ -323,7 +323,7 @@
 #define TARGET_NR_epoll_pwait	319
 #define TARGET_NR_utimensat		320
 #define TARGET_NR_signalfd		321
-#define TARGET_NR_timerfd		322
+#define TARGET_NR_timerfd_create	322
 #define TARGET_NR_eventfd		323
 #define TARGET_NR_fallocate		324
 #define TARGET_NR_timerfd_settime	325

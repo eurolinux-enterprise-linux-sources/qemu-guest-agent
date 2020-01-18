@@ -17,14 +17,20 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/gdbstub.h"
 #include "exec/helper-proto.h"
 #include "qemu/host-utils.h"
+#include "qemu/log.h"
 #include "sysemu/sysemu.h"
 #include "qemu/bitops.h"
 #include "internals.h"
 #include "qemu/crc32c.h"
+#include "exec/exec-all.h"
+#include "exec/cpu_ldst.h"
+#include "qemu/int128.h"
+#include "tcg.h"
 #include <zlib.h> /* For crc32 */
 
 /* C2.4.7 Multiply and divide */
@@ -342,12 +348,12 @@ float32 HELPER(frecpx_f32)(float32 a, void *fpstp)
 
     if (float32_is_any_nan(a)) {
         float32 nan = a;
-        if (float32_is_signaling_nan(a)) {
+        if (float32_is_signaling_nan(a, fpst)) {
             float_raise(float_flag_invalid, fpst);
-            nan = float32_maybe_silence_nan(a);
+            nan = float32_maybe_silence_nan(a, fpst);
         }
         if (fpst->default_nan_mode) {
-            nan = float32_default_nan;
+            nan = float32_default_nan(fpst);
         }
         return nan;
     }
@@ -371,12 +377,12 @@ float64 HELPER(frecpx_f64)(float64 a, void *fpstp)
 
     if (float64_is_any_nan(a)) {
         float64 nan = a;
-        if (float64_is_signaling_nan(a)) {
+        if (float64_is_signaling_nan(a, fpst)) {
             float_raise(float_flag_invalid, fpst);
-            nan = float64_maybe_silence_nan(a);
+            nan = float64_maybe_silence_nan(a, fpst);
         }
         if (fpst->default_nan_mode) {
-            nan = float64_default_nan;
+            nan = float64_default_nan(fpst);
         }
         return nan;
     }
@@ -405,7 +411,7 @@ float32 HELPER(fcvtx_f64_to_f32)(float64 a, CPUARMState *env)
     set_float_rounding_mode(float_round_to_zero, &tstat);
     set_float_exception_flags(0, &tstat);
     r = float64_to_float32(a, &tstat);
-    r = float32_maybe_silence_nan(r);
+    r = float32_maybe_silence_nan(r, &tstat);
     exflags = get_float_exception_flags(&tstat);
     if (exflags & float_flag_inexact) {
         r = make_float32(float32_val(r) | 1);
@@ -443,98 +449,111 @@ uint64_t HELPER(crc32c_64)(uint64_t acc, uint64_t val, uint32_t bytes)
     return crc32c(acc, buf, bytes) ^ 0xffffffff;
 }
 
-#if !defined(CONFIG_USER_ONLY)
-
-/* Handle a CPU exception.  */
-void aarch64_cpu_do_interrupt(CPUState *cs)
+/* Returns 0 on success; 1 otherwise.  */
+uint64_t HELPER(paired_cmpxchg64_le)(CPUARMState *env, uint64_t addr,
+                                     uint64_t new_lo, uint64_t new_hi)
 {
-    ARMCPU *cpu = ARM_CPU(cs);
-    CPUARMState *env = &cpu->env;
-    unsigned int new_el = env->exception.target_el;
-    target_ulong addr = env->cp15.vbar_el[new_el];
-    unsigned int new_mode = aarch64_pstate_mode(new_el, true);
+    uintptr_t ra = GETPC();
+    Int128 oldv, cmpv, newv;
+    bool success;
 
-    if (arm_current_el(env) < new_el) {
-        if (env->aarch64) {
-            addr += 0x400;
-        } else {
-            addr += 0x600;
-        }
-    } else if (pstate_read(env) & PSTATE_SP) {
-        addr += 0x200;
-    }
+    cmpv = int128_make128(env->exclusive_val, env->exclusive_high);
+    newv = int128_make128(new_lo, new_hi);
 
-    arm_log_exception(cs->exception_index);
-    qemu_log_mask(CPU_LOG_INT, "...from EL%d to EL%d\n", arm_current_el(env),
-                  new_el);
-    if (qemu_loglevel_mask(CPU_LOG_INT)
-        && !excp_is_internal(cs->exception_index)) {
-        qemu_log_mask(CPU_LOG_INT, "...with ESR 0x%" PRIx32 "\n",
-                      env->exception.syndrome);
-    }
-
-    if (arm_is_psci_call(cpu, cs->exception_index)) {
-        arm_handle_psci_call(cpu);
-        qemu_log_mask(CPU_LOG_INT, "...handled as PSCI call\n");
-        return;
-    }
-
-    switch (cs->exception_index) {
-    case EXCP_PREFETCH_ABORT:
-    case EXCP_DATA_ABORT:
-        env->cp15.far_el[new_el] = env->exception.vaddress;
-        qemu_log_mask(CPU_LOG_INT, "...with FAR 0x%" PRIx64 "\n",
-                      env->cp15.far_el[new_el]);
-        /* fall through */
-    case EXCP_BKPT:
-    case EXCP_UDEF:
-    case EXCP_SWI:
-    case EXCP_HVC:
-    case EXCP_HYP_TRAP:
-    case EXCP_SMC:
-        env->cp15.esr_el[new_el] = env->exception.syndrome;
-        break;
-    case EXCP_IRQ:
-    case EXCP_VIRQ:
-        addr += 0x80;
-        break;
-    case EXCP_FIQ:
-    case EXCP_VFIQ:
-        addr += 0x100;
-        break;
-    case EXCP_SEMIHOST:
-        qemu_log_mask(CPU_LOG_INT,
-                      "...handling as semihosting call 0x%" PRIx64 "\n",
-                      env->xregs[0]);
-        env->xregs[0] = do_arm_semihosting(env);
-        return;
-    default:
-        cpu_abort(cs, "Unhandled exception 0x%x\n", cs->exception_index);
-    }
-
-    if (is_a64(env)) {
-        env->banked_spsr[aarch64_banked_spsr_index(new_el)] = pstate_read(env);
-        aarch64_save_sp(env, arm_current_el(env));
-        env->elr_el[new_el] = env->pc;
-    } else {
-        env->banked_spsr[aarch64_banked_spsr_index(new_el)] = cpsr_read(env);
-        if (!env->thumb) {
-            env->cp15.esr_el[new_el] |= 1 << 25;
-        }
-        env->elr_el[new_el] = env->regs[15];
-
-        aarch64_sync_32_to_64(env);
-
-        env->condexec_bits = 0;
-    }
-    qemu_log_mask(CPU_LOG_INT, "...with ELR 0x%" PRIx64 "\n",
-                  env->elr_el[new_el]);
-
-    pstate_write(env, PSTATE_DAIF | new_mode);
-    env->aarch64 = 1;
-    aarch64_restore_sp(env, new_el);
-
-    env->pc = addr;
-    cs->interrupt_request |= CPU_INTERRUPT_EXITTB;
-}
+    if (parallel_cpus) {
+#ifndef CONFIG_ATOMIC128
+        cpu_loop_exit_atomic(ENV_GET_CPU(env), ra);
+#else
+        int mem_idx = cpu_mmu_index(env, false);
+        TCGMemOpIdx oi = make_memop_idx(MO_LEQ | MO_ALIGN_16, mem_idx);
+        oldv = helper_atomic_cmpxchgo_le_mmu(env, addr, cmpv, newv, oi, ra);
+        success = int128_eq(oldv, cmpv);
 #endif
+    } else {
+        uint64_t o0, o1;
+
+#ifdef CONFIG_USER_ONLY
+        /* ??? Enforce alignment.  */
+        uint64_t *haddr = g2h(addr);
+        o0 = ldq_le_p(haddr + 0);
+        o1 = ldq_le_p(haddr + 1);
+        oldv = int128_make128(o0, o1);
+
+        success = int128_eq(oldv, cmpv);
+        if (success) {
+            stq_le_p(haddr + 0, int128_getlo(newv));
+            stq_le_p(haddr + 1, int128_gethi(newv));
+        }
+#else
+        int mem_idx = cpu_mmu_index(env, false);
+        TCGMemOpIdx oi0 = make_memop_idx(MO_LEQ | MO_ALIGN_16, mem_idx);
+        TCGMemOpIdx oi1 = make_memop_idx(MO_LEQ, mem_idx);
+
+        o0 = helper_le_ldq_mmu(env, addr + 0, oi0, ra);
+        o1 = helper_le_ldq_mmu(env, addr + 8, oi1, ra);
+        oldv = int128_make128(o0, o1);
+
+        success = int128_eq(oldv, cmpv);
+        if (success) {
+            helper_le_stq_mmu(env, addr + 0, int128_getlo(newv), oi1, ra);
+            helper_le_stq_mmu(env, addr + 8, int128_gethi(newv), oi1, ra);
+        }
+#endif
+    }
+
+    return !success;
+}
+
+uint64_t HELPER(paired_cmpxchg64_be)(CPUARMState *env, uint64_t addr,
+                                     uint64_t new_lo, uint64_t new_hi)
+{
+    uintptr_t ra = GETPC();
+    Int128 oldv, cmpv, newv;
+    bool success;
+
+    cmpv = int128_make128(env->exclusive_val, env->exclusive_high);
+    newv = int128_make128(new_lo, new_hi);
+
+    if (parallel_cpus) {
+#ifndef CONFIG_ATOMIC128
+        cpu_loop_exit_atomic(ENV_GET_CPU(env), ra);
+#else
+        int mem_idx = cpu_mmu_index(env, false);
+        TCGMemOpIdx oi = make_memop_idx(MO_BEQ | MO_ALIGN_16, mem_idx);
+        oldv = helper_atomic_cmpxchgo_be_mmu(env, addr, cmpv, newv, oi, ra);
+        success = int128_eq(oldv, cmpv);
+#endif
+    } else {
+        uint64_t o0, o1;
+
+#ifdef CONFIG_USER_ONLY
+        /* ??? Enforce alignment.  */
+        uint64_t *haddr = g2h(addr);
+        o1 = ldq_be_p(haddr + 0);
+        o0 = ldq_be_p(haddr + 1);
+        oldv = int128_make128(o0, o1);
+
+        success = int128_eq(oldv, cmpv);
+        if (success) {
+            stq_be_p(haddr + 0, int128_gethi(newv));
+            stq_be_p(haddr + 1, int128_getlo(newv));
+        }
+#else
+        int mem_idx = cpu_mmu_index(env, false);
+        TCGMemOpIdx oi0 = make_memop_idx(MO_BEQ | MO_ALIGN_16, mem_idx);
+        TCGMemOpIdx oi1 = make_memop_idx(MO_BEQ, mem_idx);
+
+        o1 = helper_be_ldq_mmu(env, addr + 0, oi0, ra);
+        o0 = helper_be_ldq_mmu(env, addr + 8, oi1, ra);
+        oldv = int128_make128(o0, o1);
+
+        success = int128_eq(oldv, cmpv);
+        if (success) {
+            helper_be_stq_mmu(env, addr + 0, int128_gethi(newv), oi1, ra);
+            helper_be_stq_mmu(env, addr + 8, int128_getlo(newv), oi1, ra);
+        }
+#endif
+    }
+
+    return !success;
+}

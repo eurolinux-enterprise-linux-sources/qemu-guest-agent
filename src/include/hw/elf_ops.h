@@ -263,7 +263,8 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                               void *translate_opaque,
                               int must_swab, uint64_t *pentry,
                               uint64_t *lowaddr, uint64_t *highaddr,
-                              int elf_machine, int clear_lsb)
+                              int elf_machine, int clear_lsb, int data_swab,
+                              AddressSpace *as)
 {
     struct elfhdr ehdr;
     struct elf_phdr *phdr = NULL, *ph;
@@ -278,6 +279,11 @@ static int glue(load_elf, SZ)(const char *name, int fd,
         goto fail;
     if (must_swab) {
         glue(bswap_ehdr, SZ)(&ehdr);
+    }
+
+    if (elf_machine <= EM_NONE) {
+        /* The caller didn't specify an ARCH, we can figure it out */
+        elf_machine = ehdr.e_machine;
     }
 
     switch (elf_machine) {
@@ -366,6 +372,26 @@ static int glue(load_elf, SZ)(const char *name, int fd,
                 addr = ph->p_paddr;
             }
 
+            if (data_swab) {
+                int j;
+                for (j = 0; j < file_size; j += (1 << data_swab)) {
+                    uint8_t *dp = data + j;
+                    switch (data_swab) {
+                    case (1):
+                        *(uint16_t *)dp = bswap16(*(uint16_t *)dp);
+                        break;
+                    case (2):
+                        *(uint32_t *)dp = bswap32(*(uint32_t *)dp);
+                        break;
+                    case (3):
+                        *(uint64_t *)dp = bswap64(*(uint64_t *)dp);
+                        break;
+                    default:
+                        g_assert_not_reached();
+                    }
+                }
+            }
+
             /* the entry pointer in the ELF header is a virtual
              * address, if the text segments paddr and vaddr differ
              * we need to adjust the entry */
@@ -380,7 +406,7 @@ static int glue(load_elf, SZ)(const char *name, int fd,
             snprintf(label, sizeof(label), "phdr #%d: %s", i, name);
 
             /* rom_add_elf_program() seize the ownership of 'data' */
-            rom_add_elf_program(label, data, file_size, mem_size, addr);
+            rom_add_elf_program(label, data, file_size, mem_size, addr, as);
 
             total_size += mem_size;
             if (addr < low)

@@ -1,19 +1,10 @@
+#include "qemu/osdep.h"
 #include <locale.h>
-#include <glib.h>
 #include <glib/gstdio.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <unistd.h>
-#include <inttypes.h>
 
 #include "libqtest.h"
-#include "config-host.h"
-#include "qga/guest-agent-core.h"
 
 typedef struct {
     char *test_dir;
@@ -203,6 +194,26 @@ static void test_qga_ping(gconstpointer fix)
     ret = qmp_fd(fixture->fd, "{'execute': 'guest-ping'}");
     g_assert_nonnull(ret);
     qmp_assert_no_error(ret);
+
+    QDECREF(ret);
+}
+
+static void test_qga_invalid_args(gconstpointer fix)
+{
+    const TestFixture *fixture = fix;
+    QDict *ret, *error;
+    const gchar *class, *desc;
+
+    ret = qmp_fd(fixture->fd, "{'execute': 'guest-ping', "
+                 "'arguments': {'foo': 42 }}");
+    g_assert_nonnull(ret);
+
+    error = qdict_get_qdict(ret, "error");
+    class = qdict_get_try_str(error, "class");
+    desc = qdict_get_try_str(error, "desc");
+
+    g_assert_cmpstr(class, ==, "GenericError");
+    g_assert_cmpstr(desc, ==, "QMP input object member 'foo' is unexpected");
 
     QDECREF(ret);
 }
@@ -407,6 +418,7 @@ static void test_qga_file_ops(gconstpointer fix)
     /* check content */
     path = g_build_filename(fixture->test_dir, "foo", NULL);
     f = fopen(path, "r");
+    g_free(path);
     g_assert_nonnull(f);
     count = fread(tmp, 1, sizeof(tmp), f);
     g_assert_cmpint(count, ==, sizeof(helloworld));
@@ -457,8 +469,8 @@ static void test_qga_file_ops(gconstpointer fix)
     /* seek */
     cmd = g_strdup_printf("{'execute': 'guest-file-seek',"
                           " 'arguments': { 'handle': %" PRId64 ", "
-                          " 'offset': %d, 'whence': %d } }",
-                          id, 6, QGA_SEEK_SET);
+                          " 'offset': %d, 'whence': '%s' } }",
+                          id, 6, "set");
     ret = qmp_fd(fixture->fd, cmd);
     qmp_assert_no_error(ret);
     val = qdict_get_qdict(ret, "return");
@@ -550,8 +562,8 @@ static void test_qga_file_write_read(gconstpointer fix)
     /* seek to 0 */
     cmd = g_strdup_printf("{'execute': 'guest-file-seek',"
                           " 'arguments': { 'handle': %" PRId64 ", "
-                          " 'offset': %d, 'whence': %d } }",
-                          id, 0, QGA_SEEK_SET);
+                          " 'offset': %d, 'whence': '%s' } }",
+                          id, 0, "set");
     ret = qmp_fd(fixture->fd, cmd);
     qmp_assert_no_error(ret);
     val = qdict_get_qdict(ret, "return");
@@ -700,39 +712,27 @@ static void test_qga_blacklist(gconstpointer data)
 static void test_qga_config(gconstpointer data)
 {
     GError *error = NULL;
-    char *cwd, *cmd, *out, *err, *str, **strv, *conf, **argv = NULL;
+    char *cwd, *cmd, *out, *err, *str, **strv, **argv = NULL;
     char *env[2];
-    int status, tmp;
+    int status;
     gsize n;
     GKeyFile *kf;
-    const char *qga_config =
-        "[general]\n"
-        "daemon=false\n"
-        "method=virtio-serial\n"
-        "path=/path/to/org.qemu.guest_agent.0\n"
-        "pidfile=/var/foo/qemu-ga.pid\n"
-        "statedir=/var/state\n"
-        "verbose=true\n"
-        "blacklist=guest-ping;guest-get-time\n";
-
-    tmp = g_file_open_tmp(NULL, &conf, &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(tmp, >=, 0);
-    g_assert_cmpstr(conf, !=, "");
-
-    g_file_set_contents(conf, qga_config, -1, &error);
-    g_assert_no_error(error);
 
     cwd = g_get_current_dir();
     cmd = g_strdup_printf("%s%cqemu-ga -D",
                           cwd, G_DIR_SEPARATOR);
+    g_free(cwd);
     g_shell_parse_argv(cmd, NULL, &argv, &error);
+    g_free(cmd);
     g_assert_no_error(error);
 
-    env[0] = g_strdup_printf("QGA_CONF=%s", conf);
+    env[0] = g_strdup_printf("QGA_CONF=tests%cdata%ctest-qga-config",
+                             G_DIR_SEPARATOR, G_DIR_SEPARATOR);
     env[1] = NULL;
     g_spawn_sync(NULL, argv, env, 0,
                  NULL, NULL, &out, &err, &status, &error);
+    g_strfreev(argv);
+
     g_assert_no_error(error);
     g_assert_cmpstr(err, ==, "");
     g_assert_cmpint(status, ==, 0);
@@ -784,11 +784,8 @@ static void test_qga_config(gconstpointer data)
 
     g_free(out);
     g_free(err);
-    g_free(conf);
     g_free(env[0]);
     g_key_file_free(kf);
-
-    close(tmp);
 }
 
 static void test_qga_fsfreeze_status(gconstpointer fix)
@@ -831,6 +828,87 @@ static void test_qga_fsfreeze_and_thaw(gconstpointer fix)
     QDECREF(ret);
 }
 
+static void test_qga_guest_exec(gconstpointer fix)
+{
+    const TestFixture *fixture = fix;
+    QDict *ret, *val;
+    const gchar *out;
+    guchar *decoded;
+    int64_t pid, now, exitcode;
+    gsize len;
+    bool exited;
+    char *cmd;
+
+    /* exec 'echo foo bar' */
+    ret = qmp_fd(fixture->fd, "{'execute': 'guest-exec', 'arguments': {"
+                 " 'path': '/bin/echo', 'arg': [ '-n', '\" test_str \"' ],"
+                 " 'capture-output': true } }");
+    g_assert_nonnull(ret);
+    qmp_assert_no_error(ret);
+    val = qdict_get_qdict(ret, "return");
+    pid = qdict_get_int(val, "pid");
+    g_assert_cmpint(pid, >, 0);
+    QDECREF(ret);
+
+    /* wait for completion */
+    now = g_get_monotonic_time();
+    cmd = g_strdup_printf("{'execute': 'guest-exec-status',"
+                          " 'arguments': { 'pid': %" PRId64 " } }", pid);
+    do {
+        ret = qmp_fd(fixture->fd, cmd);
+        g_assert_nonnull(ret);
+        val = qdict_get_qdict(ret, "return");
+        exited = qdict_get_bool(val, "exited");
+        if (!exited) {
+            QDECREF(ret);
+        }
+    } while (!exited &&
+             g_get_monotonic_time() < now + 5 * G_TIME_SPAN_SECOND);
+    g_assert(exited);
+    g_free(cmd);
+
+    /* check stdout */
+    exitcode = qdict_get_int(val, "exitcode");
+    g_assert_cmpint(exitcode, ==, 0);
+    out = qdict_get_str(val, "out-data");
+    decoded = g_base64_decode(out, &len);
+    g_assert_cmpint(len, ==, 12);
+    g_assert_cmpstr((char *)decoded, ==, "\" test_str \"");
+    g_free(decoded);
+    QDECREF(ret);
+}
+
+static void test_qga_guest_exec_invalid(gconstpointer fix)
+{
+    const TestFixture *fixture = fix;
+    QDict *ret, *error;
+    const gchar *class, *desc;
+
+    /* invalid command */
+    ret = qmp_fd(fixture->fd, "{'execute': 'guest-exec', 'arguments': {"
+                 " 'path': '/bin/invalid-cmd42' } }");
+    g_assert_nonnull(ret);
+    error = qdict_get_qdict(ret, "error");
+    g_assert_nonnull(error);
+    class = qdict_get_str(error, "class");
+    desc = qdict_get_str(error, "desc");
+    g_assert_cmpstr(class, ==, "GenericError");
+    g_assert_cmpint(strlen(desc), >, 0);
+    QDECREF(ret);
+
+    /* invalid pid */
+    ret = qmp_fd(fixture->fd, "{'execute': 'guest-exec-status',"
+                 " 'arguments': { 'pid': 0 } }");
+    g_assert_nonnull(ret);
+    error = qdict_get_qdict(ret, "error");
+    g_assert_nonnull(error);
+    class = qdict_get_str(error, "class");
+    desc = qdict_get_str(error, "desc");
+    g_assert_cmpstr(class, ==, "GenericError");
+    g_assert_cmpint(strlen(desc), >, 0);
+    QDECREF(ret);
+}
+
 int main(int argc, char **argv)
 {
     TestFixture fix;
@@ -856,11 +934,15 @@ int main(int argc, char **argv)
     g_test_add_data_func("/qga/file-write-read", &fix, test_qga_file_write_read);
     g_test_add_data_func("/qga/get-time", &fix, test_qga_get_time);
     g_test_add_data_func("/qga/invalid-cmd", &fix, test_qga_invalid_cmd);
+    g_test_add_data_func("/qga/invalid-args", &fix, test_qga_invalid_args);
     g_test_add_data_func("/qga/fsfreeze-status", &fix,
                          test_qga_fsfreeze_status);
 
     g_test_add_data_func("/qga/blacklist", NULL, test_qga_blacklist);
     g_test_add_data_func("/qga/config", NULL, test_qga_config);
+    g_test_add_data_func("/qga/guest-exec", &fix, test_qga_guest_exec);
+    g_test_add_data_func("/qga/guest-exec-invalid", &fix,
+                         test_qga_guest_exec_invalid);
 
     if (g_getenv("QGA_TEST_SIDE_EFFECTING")) {
         g_test_add_data_func("/qga/fsfreeze-and-thaw", &fix,

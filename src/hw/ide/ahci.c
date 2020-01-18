@@ -21,17 +21,18 @@
  *
  */
 
-#include <hw/hw.h>
-#include <hw/pci/msi.h>
-#include <hw/i386/pc.h>
-#include <hw/pci/pci.h>
+#include "qemu/osdep.h"
+#include "hw/hw.h"
+#include "hw/pci/msi.h"
+#include "hw/i386/pc.h"
+#include "hw/pci/pci.h"
 
 #include "qemu/error-report.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/dma.h"
-#include "internal.h"
-#include <hw/ide/pci.h>
-#include <hw/ide/ahci.h>
+#include "hw/ide/internal.h"
+#include "hw/ide/pci.h"
+#include "hw/ide/ahci.h"
 
 #define DEBUG_AHCI 0
 
@@ -198,52 +199,38 @@ static void map_page(AddressSpace *as, uint8_t **ptr, uint64_t addr,
  * Check the cmd register to see if we should start or stop
  * the DMA or FIS RX engines.
  *
- * @ad: Device to engage.
- * @allow_stop: Allow device to transition from started to stopped?
- *   'no' is useful for migration post_load, which does not expect a transition.
+ * @ad: Device to dis/engage.
  *
  * @return 0 on success, -1 on error.
  */
-static int ahci_cond_start_engines(AHCIDevice *ad, bool allow_stop)
+static int ahci_cond_start_engines(AHCIDevice *ad)
 {
     AHCIPortRegs *pr = &ad->port_regs;
+    bool cmd_start = pr->cmd & PORT_CMD_START;
+    bool cmd_on    = pr->cmd & PORT_CMD_LIST_ON;
+    bool fis_start = pr->cmd & PORT_CMD_FIS_RX;
+    bool fis_on    = pr->cmd & PORT_CMD_FIS_ON;
 
-    if (pr->cmd & PORT_CMD_START) {
-        if (ahci_map_clb_address(ad)) {
-            pr->cmd |= PORT_CMD_LIST_ON;
-        } else {
+    if (cmd_start && !cmd_on) {
+        if (!ahci_map_clb_address(ad)) {
+            pr->cmd &= ~PORT_CMD_START;
             error_report("AHCI: Failed to start DMA engine: "
                          "bad command list buffer address");
             return -1;
         }
-    } else if (pr->cmd & PORT_CMD_LIST_ON) {
-        if (allow_stop) {
-            ahci_unmap_clb_address(ad);
-            pr->cmd = pr->cmd & ~(PORT_CMD_LIST_ON);
-        } else {
-            error_report("AHCI: DMA engine should be off, "
-                         "but appears to still be running");
-            return -1;
-        }
+    } else if (!cmd_start && cmd_on) {
+        ahci_unmap_clb_address(ad);
     }
 
-    if (pr->cmd & PORT_CMD_FIS_RX) {
-        if (ahci_map_fis_address(ad)) {
-            pr->cmd |= PORT_CMD_FIS_ON;
-        } else {
+    if (fis_start && !fis_on) {
+        if (!ahci_map_fis_address(ad)) {
+            pr->cmd &= ~PORT_CMD_FIS_RX;
             error_report("AHCI: Failed to start FIS receive engine: "
                          "bad FIS receive buffer address");
             return -1;
         }
-    } else if (pr->cmd & PORT_CMD_FIS_ON) {
-        if (allow_stop) {
-            ahci_unmap_fis_address(ad);
-            pr->cmd = pr->cmd & ~(PORT_CMD_FIS_ON);
-        } else {
-            error_report("AHCI: FIS receive engine should be off, "
-                         "but appears to still be running");
-            return -1;
-        }
+    } else if (!fis_start && fis_on) {
+        ahci_unmap_fis_address(ad);
     }
 
     return 0;
@@ -285,8 +272,8 @@ static void  ahci_port_write(AHCIState *s, int port, int offset, uint32_t val)
             pr->cmd = (pr->cmd & PORT_CMD_RO_MASK) |
                       (val & ~(PORT_CMD_RO_MASK|PORT_CMD_ICC_MASK));
 
-            /* Check FIS RX and CLB engines, allow transition to false: */
-            ahci_cond_start_engines(&s->dev[port], true);
+            /* Check FIS RX and CLB engines */
+            ahci_cond_start_engines(&s->dev[port]);
 
             /* XXX usually the FIS would be pending on the bus here and
                    issuing deferred until the OS enables FIS receival.
@@ -656,11 +643,22 @@ static bool ahci_map_fis_address(AHCIDevice *ad)
     AHCIPortRegs *pr = &ad->port_regs;
     map_page(ad->hba->as, &ad->res_fis,
              ((uint64_t)pr->fis_addr_hi << 32) | pr->fis_addr, 256);
-    return ad->res_fis != NULL;
+    if (ad->res_fis != NULL) {
+        pr->cmd |= PORT_CMD_FIS_ON;
+        return true;
+    }
+
+    pr->cmd &= ~PORT_CMD_FIS_ON;
+    return false;
 }
 
 static void ahci_unmap_fis_address(AHCIDevice *ad)
 {
+    if (ad->res_fis == NULL) {
+        DPRINTF(ad->port_no, "Attempt to unmap NULL FIS address\n");
+        return;
+    }
+    ad->port_regs.cmd &= ~PORT_CMD_FIS_ON;
     dma_memory_unmap(ad->hba->as, ad->res_fis, 256,
                      DMA_DIRECTION_FROM_DEVICE, 256);
     ad->res_fis = NULL;
@@ -672,11 +670,22 @@ static bool ahci_map_clb_address(AHCIDevice *ad)
     ad->cur_cmd = NULL;
     map_page(ad->hba->as, &ad->lst,
              ((uint64_t)pr->lst_addr_hi << 32) | pr->lst_addr, 1024);
-    return ad->lst != NULL;
+    if (ad->lst != NULL) {
+        pr->cmd |= PORT_CMD_LIST_ON;
+        return true;
+    }
+
+    pr->cmd &= ~PORT_CMD_LIST_ON;
+    return false;
 }
 
 static void ahci_unmap_clb_address(AHCIDevice *ad)
 {
+    if (ad->lst == NULL) {
+        DPRINTF(ad->port_no, "Attempt to unmap NULL CLB address\n");
+        return;
+    }
+    ad->port_regs.cmd &= ~PORT_CMD_LIST_ON;
     dma_memory_unmap(ad->hba->as, ad->lst, 1024,
                      DMA_DIRECTION_FROM_DEVICE, 1024);
     ad->lst = NULL;
@@ -910,6 +919,8 @@ static void ncq_err(NCQTransferState *ncq_tfs)
     ide_state->error = ABRT_ERR;
     ide_state->status = READY_STAT | ERR_STAT;
     ncq_tfs->drive->port_regs.scr_err |= (1 << ncq_tfs->tag);
+    qemu_sglist_destroy(&ncq_tfs->sglist);
+    ncq_tfs->used = 0;
 }
 
 static void ncq_finish(NCQTransferState *ncq_tfs)
@@ -937,6 +948,7 @@ static void ncq_cb(void *opaque, int ret)
     NCQTransferState *ncq_tfs = (NCQTransferState *)opaque;
     IDEState *ide_state = &ncq_tfs->drive->port.ifs[0];
 
+    ncq_tfs->aiocb = NULL;
     if (ret == -ECANCELED) {
         return;
     }
@@ -996,7 +1008,9 @@ static void execute_ncq_command(NCQTransferState *ncq_tfs)
         dma_acct_start(ide_state->blk, &ncq_tfs->acct,
                        &ncq_tfs->sglist, BLOCK_ACCT_READ);
         ncq_tfs->aiocb = dma_blk_read(ide_state->blk, &ncq_tfs->sglist,
-                                      ncq_tfs->lba, ncq_cb, ncq_tfs);
+                                      ncq_tfs->lba << BDRV_SECTOR_BITS,
+                                      BDRV_SECTOR_SIZE,
+                                      ncq_cb, ncq_tfs);
         break;
     case WRITE_FPDMA_QUEUED:
         DPRINTF(port, "NCQ writing %d sectors to LBA %"PRId64", tag %d\n",
@@ -1008,12 +1022,13 @@ static void execute_ncq_command(NCQTransferState *ncq_tfs)
         dma_acct_start(ide_state->blk, &ncq_tfs->acct,
                        &ncq_tfs->sglist, BLOCK_ACCT_WRITE);
         ncq_tfs->aiocb = dma_blk_write(ide_state->blk, &ncq_tfs->sglist,
-                                       ncq_tfs->lba, ncq_cb, ncq_tfs);
+                                       ncq_tfs->lba << BDRV_SECTOR_BITS,
+                                       BDRV_SECTOR_SIZE,
+                                       ncq_cb, ncq_tfs);
         break;
     default:
         DPRINTF(port, "error: unsupported NCQ command (0x%02x) received\n",
                 ncq_tfs->cmd);
-        qemu_sglist_destroy(&ncq_tfs->sglist);
         ncq_err(ncq_tfs);
     }
 }
@@ -1080,7 +1095,6 @@ static void process_ncq_command(AHCIState *s, int port, uint8_t *cmd_fis,
         error_report("ahci: PRDT length for NCQ command (0x%zx) "
                      "is smaller than the requested size (0x%zx)",
                      ncq_tfs->sglist.size, size);
-        qemu_sglist_destroy(&ncq_tfs->sglist);
         ncq_err(ncq_tfs);
         ahci_trigger_irq(ad->hba, ad, PORT_IRQ_OVERFLOW);
         return;
@@ -1466,6 +1480,7 @@ void ahci_realize(AHCIState *s, DeviceState *qdev, AddressSpace *as, int ports)
         ad->port.dma->ops = &ahci_dma_ops;
         ide_register_restart_cb(&ad->port);
     }
+    g_free(irqs);
 }
 
 void ahci_uninit(AHCIState *s)
@@ -1550,14 +1565,28 @@ static int ahci_state_post_load(void *opaque, int version_id)
     int i, j;
     struct AHCIDevice *ad;
     NCQTransferState *ncq_tfs;
+    AHCIPortRegs *pr;
     AHCIState *s = opaque;
 
     for (i = 0; i < s->ports; i++) {
         ad = &s->dev[i];
+        pr = &ad->port_regs;
 
-        /* Only remap the CLB address if appropriate, disallowing a state
-         * transition from 'on' to 'off' it should be consistent here. */
-        if (ahci_cond_start_engines(ad, false) != 0) {
+        if (!(pr->cmd & PORT_CMD_START) && (pr->cmd & PORT_CMD_LIST_ON)) {
+            error_report("AHCI: DMA engine should be off, but status bit "
+                         "indicates it is still running.");
+            return -1;
+        }
+        if (!(pr->cmd & PORT_CMD_FIS_RX) && (pr->cmd & PORT_CMD_FIS_ON)) {
+            error_report("AHCI: FIS RX engine should be off, but status bit "
+                         "indicates it is still running.");
+            return -1;
+        }
+
+        /* After a migrate, the DMA/FIS engines are "off" and
+         * need to be conditionally restarted */
+        pr->cmd &= ~(PORT_CMD_LIST_ON | PORT_CMD_FIS_ON);
+        if (ahci_cond_start_engines(ad) != 0) {
             return -1;
         }
 

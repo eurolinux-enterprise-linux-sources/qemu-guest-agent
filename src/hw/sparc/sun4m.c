@@ -21,6 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qemu-common.h"
+#include "cpu.h"
 #include "hw/sysbus.h"
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
@@ -31,10 +35,11 @@
 #include "sysemu/sysemu.h"
 #include "net/net.h"
 #include "hw/boards.h"
-#include "hw/nvram/openbios_firmware_abi.h"
 #include "hw/scsi/esp.h"
 #include "hw/i386/pc.h"
 #include "hw/isa/isa.h"
+#include "hw/nvram/sun_nvram.h"
+#include "hw/nvram/chrp_nvram.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/char/escc.h"
 #include "hw/empty_slot.h"
@@ -42,6 +47,7 @@
 #include "elf.h"
 #include "sysemu/block-backend.h"
 #include "trace.h"
+#include "qemu/cutils.h"
 
 /*
  * Sun4m architecture was used in the following machines:
@@ -95,29 +101,7 @@ struct sun4m_hwdef {
     uint8_t nvram_machine_id;
 };
 
-int DMA_get_channel_mode (int nchan)
-{
-    return 0;
-}
-int DMA_read_memory (int nchan, void *buf, int pos, int size)
-{
-    return 0;
-}
-int DMA_write_memory (int nchan, void *buf, int pos, int size)
-{
-    return 0;
-}
-void DMA_hold_DREQ (int nchan) {}
-void DMA_release_DREQ (int nchan) {}
-void DMA_schedule(void) {}
-
-void DMA_init(int high_page_enable)
-{
-}
-
-void DMA_register_channel (int nchan,
-                           DMA_transfer_handler transfer_handler,
-                           void *opaque)
+void DMA_init(ISABus *bus, int high_page_enable)
 {
 }
 
@@ -134,39 +118,17 @@ static void nvram_init(Nvram *nvram, uint8_t *macaddr,
                        int nvram_machine_id, const char *arch)
 {
     unsigned int i;
-    uint32_t start, end;
+    int sysp_end;
     uint8_t image[0x1ff0];
-    struct OpenBIOS_nvpart_v1 *part_header;
     NvramClass *k = NVRAM_GET_CLASS(nvram);
 
     memset(image, '\0', sizeof(image));
 
-    start = 0;
+    /* OpenBIOS nvram variables partition */
+    sysp_end = chrp_nvram_create_system_partition(image, 0);
 
-    // OpenBIOS nvram variables
-    // Variable partition
-    part_header = (struct OpenBIOS_nvpart_v1 *)&image[start];
-    part_header->signature = OPENBIOS_PART_SYSTEM;
-    pstrcpy(part_header->name, sizeof(part_header->name), "system");
-
-    end = start + sizeof(struct OpenBIOS_nvpart_v1);
-    for (i = 0; i < nb_prom_envs; i++)
-        end = OpenBIOS_set_var(image, end, prom_envs[i]);
-
-    // End marker
-    image[end++] = '\0';
-
-    end = start + ((end - start + 15) & ~15);
-    OpenBIOS_finish_partition(part_header, end - start);
-
-    // free partition
-    start = end;
-    part_header = (struct OpenBIOS_nvpart_v1 *)&image[start];
-    part_header->signature = OPENBIOS_PART_FREE;
-    pstrcpy(part_header->name, sizeof(part_header->name), "free");
-
-    end = 0x1fd0;
-    OpenBIOS_finish_partition(part_header, end - start);
+    /* Free space partition */
+    chrp_nvram_create_free_partition(&image[sysp_end], 0x1fd0 - sysp_end);
 
     Sun_init_header((struct Sun_nvram *)&image[0x1fd8], macaddr,
                     nvram_machine_id);
@@ -174,20 +136,6 @@ static void nvram_init(Nvram *nvram, uint8_t *macaddr,
     for (i = 0; i < sizeof(image); i++) {
         (k->write)(nvram, i, image[i]);
     }
-}
-
-static DeviceState *slavio_intctl;
-
-void sun4m_hmp_info_pic(Monitor *mon, const QDict *qdict)
-{
-    if (slavio_intctl)
-        slavio_pic_info(mon, slavio_intctl);
-}
-
-void sun4m_hmp_info_irq(Monitor *mon, const QDict *qdict)
-{
-    if (slavio_intctl)
-        slavio_irq_info(mon, slavio_intctl);
 }
 
 void cpu_check_irqs(CPUSPARCState *env)
@@ -300,7 +248,7 @@ static unsigned long sun4m_load_kernel(const char *kernel_filename,
         bswap_needed = 0;
 #endif
         kernel_size = load_elf(kernel_filename, translate_kernel_address, NULL,
-                               NULL, NULL, NULL, 1, EM_SPARC, 0);
+                               NULL, NULL, NULL, 1, EM_SPARC, 0, 0);
         if (kernel_size < 0)
             kernel_size = load_aout(kernel_filename, KERNEL_LOAD_ADDR,
                                     RAM_size - KERNEL_LOAD_ADDR, bswap_needed,
@@ -744,7 +692,7 @@ static void prom_init(hwaddr addr, const char *bios_name)
     filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
     if (filename) {
         ret = load_elf(filename, translate_prom_address, &addr, NULL,
-                       NULL, NULL, 1, EM_SPARC, 0);
+                       NULL, NULL, 1, EM_SPARC, 0, 0);
         if (ret < 0 || ret > PROM_SIZE_MAX) {
             ret = load_image_targphys(filename, addr, PROM_SIZE_MAX);
         }
@@ -890,6 +838,7 @@ static void dummy_fdc_tc(void *opaque, int irq, int level)
 static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
                           MachineState *machine)
 {
+    DeviceState *slavio_intctl;
     const char *cpu_model = machine->cpu_model;
     unsigned int i;
     void *iommu, *espdma, *ledma, *nvram;
@@ -1017,7 +966,7 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
     slavio_timer_init_all(hwdef->counter_base, slavio_irq[19], slavio_cpu_irq, smp_cpus);
 
     slavio_serial_ms_kbd_init(hwdef->ms_kb_base, slavio_irq[14],
-                              display_type == DT_NOGRAPHIC, ESCC_CLOCK, 1);
+                              !machine->enable_graphics, ESCC_CLOCK, 1);
     /* Slavio TTYA (base+4, Linux ttyS0) is the first QEMU serial device
        Slavio TTYB (base+0, Linux ttyS1) is the second QEMU serial device */
     escc_init(hwdef->serial_base, slavio_irq[15], slavio_irq[15],
@@ -1084,6 +1033,7 @@ static void sun4m_hw_init(const struct sun4m_hwdef *hwdef,
                  hwdef->ecc_version);
 
     fw_cfg = fw_cfg_init_mem(CFG_ADDR, CFG_ADDR + 2);
+    fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, (uint16_t)smp_cpus);
     fw_cfg_add_i16(fw_cfg, FW_CFG_MAX_CPUS, (uint16_t)max_cpus);
     fw_cfg_add_i64(fw_cfg, FW_CFG_RAM_SIZE, (uint64_t)ram_size);
     fw_cfg_add_i16(fw_cfg, FW_CFG_MACHINE_ID, hwdef->machine_id);
@@ -1574,10 +1524,7 @@ static void sun4m_register_types(void)
     type_register_static(&afx_info);
     type_register_static(&prom_info);
     type_register_static(&ram_info);
-}
 
-static void sun4m_machine_init(void)
-{
     type_register_static(&ss5_type);
     type_register_static(&ss10_type);
     type_register_static(&ss600mp_type);
@@ -1590,4 +1537,3 @@ static void sun4m_machine_init(void)
 }
 
 type_init(sun4m_register_types)
-machine_init(sun4m_machine_init)

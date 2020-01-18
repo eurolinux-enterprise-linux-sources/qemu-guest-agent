@@ -10,28 +10,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include <stdio.h>
+#include "qemu/osdep.h"
 #include "monitor/monitor.h"
 #include "qemu/error-report.h"
 
-/*
- * Print to current monitor if we have one, else to stderr.
- * TODO should return int, so callers can calculate width, but that
- * requires surgery to monitor_vprintf().  Left for another day.
- */
-void error_vprintf(const char *fmt, va_list ap)
-{
-    if (cur_mon && !monitor_cur_is_qmp()) {
-        monitor_vprintf(cur_mon, fmt, ap);
-    } else {
-        vfprintf(stderr, fmt, ap);
-    }
-}
-
-/*
- * Print to current monitor if we have one, else to stderr.
- * TODO just like error_vprintf()
- */
 void error_printf(const char *fmt, ...)
 {
     va_list ap;
@@ -45,11 +27,9 @@ void error_printf_unless_qmp(const char *fmt, ...)
 {
     va_list ap;
 
-    if (!monitor_cur_is_qmp()) {
-        va_start(ap, fmt);
-        error_vprintf(fmt, ap);
-        va_end(ap);
-    }
+    va_start(ap, fmt);
+    error_vprintf_unless_qmp(fmt, ap);
+    va_end(ap);
 }
 
 static Location std_loc = {
@@ -200,8 +180,8 @@ static void error_print_loc(void)
 bool enable_timestamp_msg;
 /*
  * Print an error message to current monitor if we have one, else to stderr.
- * Format arguments like vsprintf().  The result should not contain
- * newlines.
+ * Format arguments like vsprintf().  The resulting message should be
+ * a single phrase, with no newline or trailing punctuation.
  * Prepend the current location and append a newline.
  * It's wrong to call this in a QMP monitor.  Use error_setg() there.
  */
@@ -224,8 +204,8 @@ void error_vreport(const char *fmt, va_list ap)
 
 /*
  * Print an error message to current monitor if we have one, else to stderr.
- * Format arguments like sprintf().  The result should not contain
- * newlines.
+ * Format arguments like sprintf().  The resulting message should be a
+ * single phrase, with no newline or trailing punctuation.
  * Prepend the current location and append a newline.
  * It's wrong to call this in a QMP monitor.  Use error_setg() there.
  */
