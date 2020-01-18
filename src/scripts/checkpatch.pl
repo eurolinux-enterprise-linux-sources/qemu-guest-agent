@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+#!/usr/bin/perl -w
 # (c) 2001, Dave Jones. (the file handling bit)
 # (c) 2005, Joel Schopp <jschopp@austin.ibm.com> (the ugly bit)
 # (c) 2007,2008, Andy Whitcroft <apw@uk.ibm.com> (new conditions, test suite)
@@ -6,12 +6,9 @@
 # Licensed under the terms of the GNU GPL License version 2
 
 use strict;
-use warnings;
 
 my $P = $0;
 $P =~ s@.*/@@g;
-
-our $SrcFile    = qr{\.(?:h|c|cpp|s|S|pl|py|sh)$};
 
 my $V = '0.31';
 
@@ -20,13 +17,12 @@ use Getopt::Long qw(:config no_auto_abbrev);
 my $quiet = 0;
 my $tree = 1;
 my $chk_signoff = 1;
-my $chk_patch = undef;
-my $chk_branch = undef;
+my $chk_patch = 1;
 my $tst_only;
 my $emacs = 0;
 my $terse = 0;
-my $file = undef;
-my $no_warnings = 0;
+my $file = 0;
+my $check = 0;
 my $summary = 1;
 my $mailback = 0;
 my $summary_file = 0;
@@ -38,23 +34,18 @@ sub help {
 	my ($exitcode) = @_;
 
 	print << "EOM";
-Usage:
-
-    $P [OPTION]... [FILE]...
-    $P [OPTION]... [GIT-REV-LIST]
-
+Usage: $P [OPTION]... [FILE]...
 Version: $V
 
 Options:
   -q, --quiet                quiet
   --no-tree                  run without a kernel tree
   --no-signoff               do not check for 'Signed-off-by' line
-  --patch                    treat FILE as patchfile
-  --branch                   treat args as GIT revision list
+  --patch                    treat FILE as patchfile (default)
   --emacs                    emacs compile window format
   --terse                    one line per report
   -f, --file                 treat FILE as regular source file
-  --strict                   fail if only warnings are found
+  --subjective, --strict     enable more subjective tests
   --root=PATH                PATH to the kernel tree root
   --no-summary               suppress the per-file summary
   --mailback                 only produce a report in case of warnings/errors
@@ -77,11 +68,11 @@ GetOptions(
 	'tree!'		=> \$tree,
 	'signoff!'	=> \$chk_signoff,
 	'patch!'	=> \$chk_patch,
-	'branch!'	=> \$chk_branch,
 	'emacs!'	=> \$emacs,
 	'terse!'	=> \$terse,
 	'f|file!'	=> \$file,
-	'strict!'	=> \$no_warnings,
+	'subjective!'	=> \$check,
+	'strict!'	=> \$check,
 	'root=s'	=> \$root,
 	'summary!'	=> \$summary,
 	'mailback!'	=> \$mailback,
@@ -100,48 +91,6 @@ my $exit = 0;
 if ($#ARGV < 0) {
 	print "$P: no input files\n";
 	exit(1);
-}
-
-if (!defined $chk_branch && !defined $chk_patch && !defined $file) {
-	$chk_branch = $ARGV[0] =~ /.\.\./ ? 1 : 0;
-	$file = $ARGV[0] =~ /$SrcFile/ ? 1 : 0;
-	$chk_patch = $chk_branch || $file ? 0 : 1;
-} elsif (!defined $chk_branch && !defined $chk_patch) {
-	if ($file) {
-		$chk_branch = $chk_patch = 0;
-	} else {
-		$chk_branch = $ARGV[0] =~ /.\.\./ ? 1 : 0;
-		$chk_patch = $chk_branch ? 0 : 1;
-	}
-} elsif (!defined $chk_branch && !defined $file) {
-	if ($chk_patch) {
-		$chk_branch = $file = 0;
-	} else {
-		$chk_branch = $ARGV[0] =~ /.\.\./ ? 1 : 0;
-		$file = $chk_branch ? 0 : 1;
-	}
-} elsif (!defined $chk_patch && !defined $file) {
-	if ($chk_branch) {
-		$chk_patch = $file = 0;
-	} else {
-		$file = $ARGV[0] =~ /$SrcFile/ ? 1 : 0;
-		$chk_patch = $file ? 0 : 1;
-	}
-} elsif (!defined $chk_branch) {
-	$chk_branch = $chk_patch || $file ? 0 : 1;
-} elsif (!defined $chk_patch) {
-	$chk_patch = $chk_branch || $file ? 0 : 1;
-} elsif (!defined $file) {
-	$file = $chk_patch || $chk_branch ? 0 : 1;
-}
-
-if (($chk_patch && $chk_branch) ||
-    ($chk_patch && $file) ||
-    ($chk_branch && $file)) {
-	die "Only one of --file, --branch, --patch is permitted\n";
-}
-if (!$chk_patch && !$chk_branch && !$file) {
-	die "One of --file, --branch, --patch is required\n";
 }
 
 my $dbg_values = 0;
@@ -263,9 +212,6 @@ our @typeList = (
 	qr{${Ident}_t},
 	qr{${Ident}_handler},
 	qr{${Ident}_handler_fn},
-	qr{target_(?:u)?long},
-	qr{hwaddr},
-	qr{xml${Ident}},
 );
 
 # This can be modified by sub possible.  Since it can be empty, be careful
@@ -304,66 +250,32 @@ $chk_signoff = 0 if ($file);
 my @rawlines = ();
 my @lines = ();
 my $vname;
-if ($chk_branch) {
-	my @patches;
-	my $HASH;
-	open($HASH, "-|", "git", "log", "--format=%H", $ARGV[0]) ||
-		die "$P: git log --format=%H $ARGV[0] failed - $!\n";
-
-	while (<$HASH>) {
+for my $filename (@ARGV) {
+	my $FILE;
+	if ($file) {
+		open($FILE, '-|', "diff -u /dev/null $filename") ||
+			die "$P: $filename: diff failed - $!\n";
+	} elsif ($filename eq '-') {
+		open($FILE, '<&STDIN');
+	} else {
+		open($FILE, '<', "$filename") ||
+			die "$P: $filename: open failed - $!\n";
+	}
+	if ($filename eq '-') {
+		$vname = 'Your patch';
+	} else {
+		$vname = $filename;
+	}
+	while (<$FILE>) {
 		chomp;
-		push @patches, $_;
+		push(@rawlines, $_);
 	}
-
-	close $HASH;
-
-	die "$P: no revisions returned for revlist '$chk_branch'\n"
-	    unless @patches;
-
-	for my $hash (@patches) {
-		my $FILE;
-		open($FILE, '-|', "git", "show", $hash) ||
-			die "$P: git show $hash - $!\n";
-		$vname = $hash;
-		while (<$FILE>) {
-			chomp;
-			push(@rawlines, $_);
-		}
-		close($FILE);
-		if (!process($hash)) {
-			$exit = 1;
-		}
-		@rawlines = ();
-		@lines = ();
+	close($FILE);
+	if (!process($filename)) {
+		$exit = 1;
 	}
-} else {
-	for my $filename (@ARGV) {
-		my $FILE;
-		if ($file) {
-			open($FILE, '-|', "diff -u /dev/null $filename") ||
-				die "$P: $filename: diff failed - $!\n";
-		} elsif ($filename eq '-') {
-			open($FILE, '<&STDIN');
-		} else {
-			open($FILE, '<', "$filename") ||
-				die "$P: $filename: open failed - $!\n";
-		}
-		if ($filename eq '-') {
-			$vname = 'Your patch';
-		} else {
-			$vname = $filename;
-		}
-		while (<$FILE>) {
-			chomp;
-			push(@rawlines, $_);
-		}
-		close($FILE);
-		if (!process($filename)) {
-			$exit = 1;
-		}
-		@rawlines = ();
-		@lines = ();
-	}
+	@rawlines = ();
+	@lines = ();
 }
 
 exit($exit);
@@ -450,7 +362,7 @@ sub sanitise_line {
 	for ($off = 1; $off < length($line); $off++) {
 		$c = substr($line, $off, 1);
 
-		# Comments we are wacking completely including the begin
+		# Comments we are wacking completly including the begin
 		# and end, all to $;.
 		if ($sanitise_quote eq '' && substr($line, $off, 2) eq '/*') {
 			$sanitise_quote = '*/';
@@ -1159,6 +1071,12 @@ sub WARN {
 		our $cnt_warn++;
 	}
 }
+sub CHK {
+	if ($check && report("CHECK: $_[0]\n")) {
+		our $clean = 0;
+		our $cnt_chk++;
+	}
+}
 
 sub process {
 	my $filename = shift;
@@ -1360,21 +1278,16 @@ sub process {
 			}
 		}
 
-# Accept git diff extended headers as valid patches
-		if ($line =~ /^(?:rename|copy) (?:from|to) [\w\/\.\-]+\s*$/) {
-			$is_patch = 1;
-		}
-
 #check the patch for a signoff:
 		if ($line =~ /^\s*signed-off-by:/i) {
 			# This is a signoff, if ugly, so do not double report.
 			$signoff++;
 			if (!($line =~ /^\s*Signed-off-by:/)) {
-				ERROR("The correct form is \"Signed-off-by\"\n" .
+				WARN("Signed-off-by: is the preferred form\n" .
 					$herecurr);
 			}
 			if ($line =~ /^\s*signed-off-by:\S/i) {
-				ERROR("space required after Signed-off-by:\n" .
+				WARN("space required after Signed-off-by:\n" .
 					$herecurr);
 			}
 		}
@@ -1400,86 +1313,42 @@ sub process {
 # ignore non-hunk lines and lines being removed
 		next if (!$hunk_line || $line =~ /^-/);
 
-# ignore files that are being periodically imported from Linux
-		next if ($realfile =~ /^(linux-headers|include\/standard-headers)\//);
-
 #trailing whitespace
 		if ($line =~ /^\+.*\015/) {
 			my $herevet = "$here\n" . cat_vet($rawline) . "\n";
 			ERROR("DOS line endings\n" . $herevet);
 
-		} elsif ($realfile =~ /^docs\/.+\.txt/ ||
-			 $realfile =~ /^docs\/.+\.md/) {
-		    if ($rawline =~ /^\+\s+$/ && $rawline !~ /^\+ {4}$/) {
-			# TODO: properly check we're in a code block
-			#       (surrounding text is 4-column aligned)
-			my $herevet = "$here\n" . cat_vet($rawline) . "\n";
-			ERROR("code blocks in documentation should have " .
-			      "empty lines with exactly 4 columns of " .
-			      "whitespace\n" . $herevet);
-		    }
 		} elsif ($rawline =~ /^\+.*\S\s+$/ || $rawline =~ /^\+\s+$/) {
 			my $herevet = "$here\n" . cat_vet($rawline) . "\n";
 			ERROR("trailing whitespace\n" . $herevet);
 			$rpt_cleaners = 1;
 		}
 
-# checks for trace-events files
-		if ($realfile =~ /trace-events$/ && $line =~ /^\+/) {
-			if ($rawline =~ /%[-+ 0]*#/) {
-				ERROR("Don't use '#' flag of printf format ('%#') in " .
-				      "trace-events, use '0x' prefix instead\n" . $herecurr);
-			} else {
-				my $hex =
-					qr/%[-+ *.0-9]*([hljztL]|ll|hh)?(x|X|"\s*PRI[xX][^"]*"?)/;
-
-				# don't consider groups splitted by [.:/ ], like 2A.20:12ab
-				my $tmpline = $rawline;
-				$tmpline =~ s/($hex[.:\/ ])+$hex//g;
-
-				if ($tmpline =~ /(?<!0x)$hex/) {
-					ERROR("Hex numbers must be prefixed with '0x'\n" .
-					      $herecurr);
-				}
-			}
-		}
-
 # check we are in a valid source file if not then ignore this hunk
-		next if ($realfile !~ /$SrcFile/);
+		next if ($realfile !~ /\.(h|c|cpp|s|S|pl|sh)$/);
 
-#90 column limit; exempt URLs, if no other words on line
+#80 column limit
 		if ($line =~ /^\+/ &&
 		    !($line =~ /^\+\s*"[^"]*"\s*(?:\s*|,|\)\s*;)\s*$/) &&
-		    !($rawline =~ /^[^[:alnum:]]*https?:\S*$/) &&
 		    $length > 80)
 		{
-			if ($length > 90) {
-				ERROR("line over 90 characters\n" . $herecurr);
-			} else {
-				WARN("line over 80 characters\n" . $herecurr);
-			}
+			WARN("line over 80 characters\n" . $herecurr);
 		}
 
 # check for spaces before a quoted newline
 		if ($rawline =~ /^.*\".*\s\\n/) {
-			ERROR("unnecessary whitespace before a quoted newline\n" . $herecurr);
+			WARN("unnecessary whitespace before a quoted newline\n" . $herecurr);
 		}
 
 # check for adding lines without a newline.
 		if ($line =~ /^\+/ && defined $lines[$linenr] && $lines[$linenr] =~ /^\\ No newline at end of file/) {
-			ERROR("adding a line without newline at end of file\n" . $herecurr);
+			WARN("adding a line without newline at end of file\n" . $herecurr);
 		}
 
-# check for RCS/CVS revision markers
-		if ($rawline =~ /^\+.*\$(Revision|Log|Id)(?:\$|\b)/) {
-			ERROR("CVS style keyword markers, these will _not_ be updated\n". $herecurr);
-		}
+# check we are in a valid source file C or perl if not then ignore this hunk
+		next if ($realfile !~ /\.(h|c|cpp|pl)$/);
 
-# tabs are only allowed in assembly source code, and in
-# some scripts we imported from other projects.
-		next if ($realfile =~ /\.(s|S)$/);
-		next if ($realfile =~ /(checkpatch|get_maintainer|texi2pod)\.pl$/);
-
+# in QEMU, no tabs are allowed
 		if ($rawline =~ /^\+.*\t/) {
 			my $herevet = "$here\n" . cat_vet($rawline) . "\n";
 			ERROR("code indent should never use tabs\n" . $herevet);
@@ -1488,6 +1357,11 @@ sub process {
 
 # check we are in a valid C source file if not then ignore this hunk
 		next if ($realfile !~ /\.(h|c|cpp)$/);
+
+# check for RCS/CVS revision markers
+		if ($rawline =~ /^\+.*\$(Revision|Log|Id)(?:\$|)/) {
+			WARN("CVS style keyword markers, these will _not_ be updated\n". $herecurr);
+		}
 
 # Check for potential 'bare' types
 		my ($stat, $cond, $line_nr_next, $remain_next, $off_next,
@@ -1618,15 +1492,10 @@ sub process {
 			{
 				my ($nlength, $nindent) = line_stats($lines[$ctx_ln - 1]);
 				if ($nindent > $indent) {
-					ERROR("trailing semicolon indicates no statements, indent implies otherwise\n" .
+					WARN("trailing semicolon indicates no statements, indent implies otherwise\n" .
 						"$here\n$ctx\n$rawlines[$ctx_ln - 1]\n");
 				}
 			}
-		}
-
-# 'do ... while (0/false)' only makes sense in macros, without trailing ';'
-		if ($line =~ /while\s*\((0|false)\);/) {
-			ERROR("suspicious ; after while (0)\n" . $herecurr);
 		}
 
 # Check relative indent for conditionals and blocks.
@@ -1711,7 +1580,7 @@ sub process {
 
 			if ($check && (($sindent % 4) != 0 ||
 			    ($sindent <= $indent && $s ne ''))) {
-				ERROR("suspect code indent for conditional statements ($indent, $sindent)\n" . $herecurr . "$stat_real\n");
+				WARN("suspect code indent for conditional statements ($indent, $sindent)\n" . $herecurr . "$stat_real\n");
 			}
 		}
 
@@ -1846,15 +1715,11 @@ sub process {
 #  1. with a type on the left -- int [] a;
 #  2. at the beginning of a line for slice initialisers -- [0...10] = 5,
 #  3. inside a curly brace -- = { [0...10] = 5 }
-#  4. after a comma -- [1] = 5, [2] = 6
-#  5. in a macro definition -- #define abc(x) [x] = y
 		while ($line =~ /(.*?\s)\[/g) {
 			my ($where, $prefix) = ($-[1], $1);
 			if ($prefix !~ /$Type\s+$/ &&
 			    ($where != 0 || $prefix !~ /^.\s+$/) &&
-			    $prefix !~ /{\s+$/ &&
-			    $prefix !~ /\#\s*define[^(]*\([^)]*\)\s+$/ &&
-			    $prefix !~ /,\s+$/) {
+			    $prefix !~ /{\s+$/) {
 				ERROR("space prohibited before open square bracket '['\n" . $herecurr);
 			}
 		}
@@ -1868,7 +1733,7 @@ sub process {
 			# Ignore those directives where spaces _are_ permitted.
 			if ($name =~ /^(?:
 				if|for|while|switch|return|case|
-				volatile|__volatile__|coroutine_fn|
+				volatile|__volatile__|
 				__attribute__|format|__extension__|
 				asm|__asm__)$/x)
 			{
@@ -1889,7 +1754,7 @@ sub process {
 			} elsif ($ctx =~ /$Type$/) {
 
 			} else {
-				ERROR("space prohibited between function name and open parenthesis '('\n" . $herecurr);
+				WARN("space prohibited between function name and open parenthesis '('\n" . $herecurr);
 			}
 		}
 # Check operator spacing.
@@ -2025,6 +1890,19 @@ sub process {
 						ERROR("space prohibited after that '$op' $at\n" . $hereptr);
 					}
 
+
+				# << and >> may either have or not have spaces both sides
+				} elsif ($op eq '<<' or $op eq '>>' or
+					 $op eq '&' or $op eq '^' or $op eq '|' or
+					 $op eq '+' or $op eq '-' or
+					 $op eq '*' or $op eq '/' or
+					 $op eq '%')
+				{
+					if ($ctx =~ /Wx[^WCE]|[^WCE]xW/) {
+						ERROR("need consistent spacing around '$op' $at\n" .
+							$hereptr);
+					}
+
 				# A colon needs no spaces before when it is
 				# terminating a case value or a label.
 				} elsif ($opv eq ':C' || $opv eq ':L') {
@@ -2128,7 +2006,7 @@ sub process {
 		if ($line =~ /^.\s*return\s*(E[A-Z]*)\s*;/) {
 			my $name = $1;
 			if ($name ne 'EOF' && $name ne 'ERROR') {
-				ERROR("return of an errno should typically be -ve (return -$1)\n" . $herecurr);
+				WARN("return of an errno should typically be -ve (return -$1)\n" . $herecurr);
 			}
 		}
 
@@ -2200,7 +2078,7 @@ sub process {
 				(?:\&\&|\|\||\)|\])
 			)/x)
 		{
-			ERROR("boolean test with hexadecimal, perhaps just 1 \& or \|?\n" . $herecurr);
+			WARN("boolean test with hexadecimal, perhaps just 1 \& or \|?\n" . $herecurr);
 		}
 
 # if and else should not have general statements after it
@@ -2256,7 +2134,7 @@ sub process {
 
 #no spaces allowed after \ in define
 		if ($line=~/\#\s*define.*\\\s$/) {
-			ERROR("Whitespace after \\ makes next lines useless\n" . $herecurr);
+			WARN("Whitepspace after \\ makes next lines useless\n" . $herecurr);
 		}
 
 # multi-statement macros should be enclosed in a do while loop, grab the
@@ -2353,21 +2231,8 @@ sub process {
 			}
 		}
 
-# check for missing bracing around if etc
-		if ($line =~ /(^.*)\b(?:if|while|for)\b/ &&
-			$line !~ /\#\s*if/) {
-			my $allowed = 0;
-
-			# Check the pre-context.
-			if ($line =~ /(\}.*?)$/) {
-				my $pre = $1;
-
-				if ($line !~ /else/) {
-					print "APW: ALLOWED: pre<$pre> line<$line>\n"
-						if $dbg_adv_apw;
-					$allowed = 1;
-				}
-			}
+# check for missing bracing round if etc
+		if ($line =~ /(^.*)\bif\b/ && $line !~ /\#\s*if/) {
 			my ($level, $endln, @chunks) =
 				ctx_statement_full($linenr, $realcnt, 1);
                         if ($dbg_adv_apw) {
@@ -2376,6 +2241,7 @@ sub process {
                                 if $#chunks >= 1;
                         }
 			if ($#chunks >= 0 && $level == 0) {
+				my $allowed = 0;
 				my $seen = 0;
 				my $herectx = $here . "\n";
 				my $ln = $linenr - 1;
@@ -2419,8 +2285,8 @@ sub process {
                                             $allowed = 1;
 					}
 				}
-				if ($seen != ($#chunks + 1) && !$allowed) {
-					ERROR("braces {} are necessary for all arms of this statement\n" . $herectx);
+				if ($seen != ($#chunks + 1)) {
+					WARN("braces {} are necessary for all arms of this statement\n" . $herectx);
 				}
 			}
 		}
@@ -2488,22 +2354,19 @@ sub process {
 					$herectx .= raw_line($linenr, $n) . "\n";;
 				}
 
-				ERROR("braces {} are necessary even for single statement blocks\n" . $herectx);
+				WARN("braces {} are necessary even for single statement blocks\n" . $herectx);
 			}
 		}
 
 # no volatiles please
 		my $asm_volatile = qr{\b(__asm__|asm)\s+(__volatile__|volatile)\b};
-		if ($line =~ /\bvolatile\b/ && $line !~ /$asm_volatile/ &&
-                    $line !~ /sig_atomic_t/ &&
-                    !ctx_has_comment($first_line, $linenr)) {
-			my $msg = "Use of volatile is usually wrong, please add a comment\n" . $herecurr;
-                        ERROR($msg);
+		if ($line =~ /\bvolatile\b/ && $line !~ /$asm_volatile/) {
+			WARN("Use of volatile is usually wrong: see Documentation/volatile-considered-harmful.txt\n" . $herecurr);
 		}
 
 # warn about #if 0
 		if ($line =~ /^.\s*\#\s*if\s+0\b/) {
-			ERROR("if this code is redundant consider removing it\n" .
+			WARN("if this code is redundant consider removing it\n" .
 				$herecurr);
 		}
 
@@ -2511,7 +2374,7 @@ sub process {
 		if ($prevline =~ /\bif\s*\(([^\)]*)\)/) {
 			my $expr = $1;
 			if ($line =~ /\bg_free\(\Q$expr\E\);/) {
-				ERROR("g_free(NULL) is safe this check is probably not required\n" . $hereprev);
+				WARN("g_free(NULL) is safe this check is probably not required\n" . $hereprev);
 			}
 		}
 
@@ -2529,7 +2392,7 @@ sub process {
 # check for memory barriers without a comment.
 		if ($line =~ /\b(smp_mb|smp_rmb|smp_wmb|smp_read_barrier_depends)\(/) {
 			if (!ctx_has_comment($first_line, $linenr)) {
-				ERROR("memory barrier without comment\n" . $herecurr);
+				WARN("memory barrier without comment\n" . $herecurr);
 			}
 		}
 # check of hardware specific defines
@@ -2541,7 +2404,7 @@ sub process {
 
 # Check that the storage class is at the beginning of a declaration
 		if ($line =~ /\b$Storage\b/ && $line !~ /^.\s*$Storage\b/) {
-			ERROR("storage class should be at the beginning of the declaration\n" . $herecurr)
+			WARN("storage class should be at the beginning of the declaration\n" . $herecurr)
 		}
 
 # check the location of the inline attribute, that it is between
@@ -2553,7 +2416,7 @@ sub process {
 
 # check for sizeof(&)
 		if ($line =~ /\bsizeof\s*\(\s*\&/) {
-			ERROR("sizeof(& should be avoided\n" . $herecurr);
+			WARN("sizeof(& should be avoided\n" . $herecurr);
 		}
 
 # check for new externs in .c files.
@@ -2570,49 +2433,40 @@ sub process {
 			if ($s =~ /^\s*;/ &&
 			    $function_name ne 'uninitialized_var')
 			{
-				ERROR("externs should be avoided in .c files\n" .  $herecurr);
+				WARN("externs should be avoided in .c files\n" .  $herecurr);
 			}
 
 			if ($paren_space =~ /\n/) {
-				ERROR("arguments for function declarations should follow identifier\n" . $herecurr);
+				WARN("arguments for function declarations should follow identifier\n" . $herecurr);
 			}
 
 		} elsif ($realfile =~ /\.c$/ && defined $stat &&
 		    $stat =~ /^.\s*extern\s+/)
 		{
-			ERROR("externs should be avoided in .c files\n" .  $herecurr);
+			WARN("externs should be avoided in .c files\n" .  $herecurr);
 		}
 
 # check for pointless casting of g_malloc return
 		if ($line =~ /\*\s*\)\s*g_(try)?(m|re)alloc(0?)(_n)?\b/) {
 			if ($2 == 'm') {
-				ERROR("unnecessary cast may hide bugs, use g_$1new$3 instead\n" . $herecurr);
+				WARN("unnecessary cast may hide bugs, use g_$1new$3 instead\n" . $herecurr);
 			} else {
-				ERROR("unnecessary cast may hide bugs, use g_$1renew$3 instead\n" . $herecurr);
+				WARN("unnecessary cast may hide bugs, use g_$1renew$3 instead\n" . $herecurr);
 			}
 		}
 
 # check for gcc specific __FUNCTION__
 		if ($line =~ /__FUNCTION__/) {
-			ERROR("__func__ should be used instead of gcc specific __FUNCTION__\n"  . $herecurr);
-		}
-
-# recommend g_path_get_* over g_strdup(basename/dirname(...))
-		if ($line =~ /\bg_strdup\s*\(\s*(basename|dirname)\s*\(/) {
-			WARN("consider using g_path_get_$1() in preference to g_strdup($1())\n" . $herecurr);
+			WARN("__func__ should be used instead of gcc specific __FUNCTION__\n"  . $herecurr);
 		}
 
 # recommend qemu_strto* over strto* for numeric conversions
-		if ($line =~ /\b(strto[^kd].*?)\s*\(/) {
-			ERROR("consider using qemu_$1 in preference to $1\n" . $herecurr);
-		}
-# recommend sigaction over signal for portability, when establishing a handler
-		if ($line =~ /\bsignal\s*\(/ && !($line =~ /SIG_(?:IGN|DFL)/)) {
-			ERROR("use sigaction to establish signal handlers; signal is not portable\n" . $herecurr);
+		if ($line =~ /\b(strto[^k].*?)\s*\(/) {
+			WARN("consider using qemu_$1 in preference to $1\n" . $herecurr);
 		}
 # check for module_init(), use category-specific init macros explicitly please
 		if ($line =~ /^module_init\s*\(/) {
-			ERROR("please use block_init(), type_init() etc. instead of module_init()\n" . $herecurr);
+			WARN("please use block_init(), type_init() etc. instead of module_init()\n" . $herecurr);
 		}
 # check for various ops structs, ensure they are const.
 		my $struct_ops = qr{AIOCBInfo|
@@ -2630,13 +2484,14 @@ sub process {
 				SCSIBusInfo|
 				SCSIReqOps|
 				Spice[A-Z][a-zA-Z0-9]*Interface|
+				TPMDriverOps|
 				USBDesc[A-Z][a-zA-Z0-9]*|
 				VhostOps|
 				VMStateDescription|
 				VMStateInfo}x;
 		if ($line !~ /\bconst\b/ &&
-		    $line =~ /\b($struct_ops)\b.*=/) {
-			ERROR("initializer for struct $1 should normally be const\n" .
+		    $line =~ /\b($struct_ops)\b/) {
+			WARN("struct $1 should normally be const\n" .
 				$herecurr);
 		}
 
@@ -2646,61 +2501,17 @@ sub process {
 			$string = substr($rawline, $-[1], $+[1] - $-[1]);
 			$string =~ s/%%/__/g;
 			if ($string =~ /(?<!%)%L[udi]/) {
-				ERROR("\%Ld/%Lu are not-standard C, use %lld/%llu\n" . $herecurr);
+				WARN("\%Ld/%Lu are not-standard C, use %lld/%llu\n" . $herecurr);
 				last;
 			}
 		}
 
 # QEMU specific tests
 		if ($rawline =~ /\b(?:Qemu|QEmu)\b/) {
-			ERROR("use QEMU instead of Qemu or QEmu\n" . $herecurr);
+			WARN("use QEMU instead of Qemu or QEmu\n" . $herecurr);
 		}
 
-# Qemu error function tests
-
-	# Find newlines in error messages
-	my $qemu_error_funcs = qr{error_setg|
-				error_setg_errno|
-				error_setg_win32|
-				error_setg_file_open|
-				error_set|
-				error_prepend|
-				warn_reportf_err|
-				error_reportf_err|
-				error_vreport|
-				warn_vreport|
-				info_vreport|
-				error_report|
-				warn_report|
-				info_report}x;
-
-	if ($rawline =~ /\b(?:$qemu_error_funcs)\s*\(.*\".*\\n/) {
-		ERROR("Error messages should not contain newlines\n" . $herecurr);
-	}
-
-	# Continue checking for error messages that contains newlines. This
-	# check handles cases where string literals are spread over multiple lines.
-	# Example:
-	# error_report("Error msg line #1"
-	#              "Error msg line #2\n");
-	my $quoted_newline_regex = qr{\+\s*\".*\\n.*\"};
-	my $continued_str_literal = qr{\+\s*\".*\"};
-
-	if ($rawline =~ /$quoted_newline_regex/) {
-		# Backtrack to first line that does not contain only a quoted literal
-		# and assume that it is the start of the statement.
-		my $i = $linenr - 2;
-
-		while (($i >= 0) & $rawlines[$i] =~ /$continued_str_literal/) {
-			$i--;
-		}
-
-		if ($rawlines[$i] =~ /\b(?:$qemu_error_funcs)\s*\(/) {
-			ERROR("Error messages should not contain newlines\n" . $herecurr);
-		}
-	}
-
-# check for non-portable libc calls that have portable alternatives in QEMU
+# check for non-portable ffs() calls that have portable alternatives in QEMU
 		if ($line =~ /\bffs\(/) {
 			ERROR("use ctz32() instead of ffs()\n" . $herecurr);
 		}
@@ -2709,30 +2520,6 @@ sub process {
 		}
 		if ($line =~ /\bffsll\(/) {
 			ERROR("use ctz64() instead of ffsll()\n" . $herecurr);
-		}
-		if ($line =~ /\bbzero\(/) {
-			ERROR("use memset() instead of bzero()\n" . $herecurr);
-		}
-		my $non_exit_glib_asserts = qr{g_assert_cmpstr|
-						g_assert_cmpint|
-						g_assert_cmpuint|
-						g_assert_cmphex|
-						g_assert_cmpfloat|
-						g_assert_true|
-						g_assert_false|
-						g_assert_nonnull|
-						g_assert_null|
-						g_assert_no_error|
-						g_assert_error|
-						g_test_assert_expected_messages|
-						g_test_trap_assert_passed|
-						g_test_trap_assert_stdout|
-						g_test_trap_assert_stdout_unmatched|
-						g_test_trap_assert_stderr|
-						g_test_trap_assert_stderr_unmatched}x;
-		if ($realfile !~ /^tests\// &&
-			$line =~ /\b(?:$non_exit_glib_asserts)\(/) {
-			ERROR("Use g_assert or g_assert_not_reached\n". $herecurr);
 		}
 	}
 
@@ -2765,6 +2552,7 @@ sub process {
 	if ($summary && !($clean == 1 && $quiet == 1)) {
 		print "$filename " if ($summary_file);
 		print "total: $cnt_error errors, $cnt_warn warnings, " .
+			(($check)? "$cnt_chk checks, " : "") .
 			"$cnt_lines lines checked\n";
 		print "\n" if ($quiet == 0);
 	}
@@ -2787,5 +2575,5 @@ sub process {
 		print "CHECKPATCH in MAINTAINERS.\n";
 	}
 
-	return ($no_warnings ? $clean : $cnt_error == 0);
+	return $clean;
 }

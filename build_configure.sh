@@ -20,8 +20,32 @@ optflags=$1
 shift
 have_fdt=$1
 shift
+have_gluster=$1
+shift
+have_guest_agent=$1
+shift
+have_numa=$1
+shift
+have_rbd=$1
+shift
+have_rdma=$1
+shift
+have_seccomp=$1
+shift
+have_spice=$1
+shift
+have_usbredir=$1
+shift
 have_tcmalloc=$1
 shift
+
+if [ "$have_rbd" == "enable" ]; then
+  rbd_driver=rbd,
+fi
+
+if [ "$have_gluster" == "enable" ]; then
+  gluster_driver=gluster,
+fi
 
 ./configure \
     --prefix=${_prefix} \
@@ -35,54 +59,58 @@ shift
     --with-pkgversion=${nvr} \
     --with-confsuffix=/${pkgname} \
     --with-coroutine=ucontext \
+    --with-system-pixman \
+    --disable-archipelago \
     --disable-bluez \
     --disable-brlapi \
     --disable-cap-ng \
     --enable-coroutine-pool \
-    --disable-curl \
+    --enable-curl \
     --disable-curses \
     --disable-debug-tcg \
     --enable-docs \
     --disable-gtk \
     --enable-kvm \
-    --disable-libiscsi \
+    --enable-libiscsi \
     --disable-libnfs \
-    --disable-libssh2 \
-    --disable-libusb \
+    --enable-libssh2 \
+    --enable-libusb \
     --disable-bzip2 \
-    --disable-linux-aio \
-    --disable-lzo \
+    --enable-linux-aio \
+    --enable-lzo \
     --disable-opengl \
     --enable-pie \
     --disable-qom-cast-debug \
     --disable-sdl \
-    --disable-smartcard \
-    --disable-snappy \
+    --enable-smartcard \
+    --enable-snappy \
     --disable-sparse \
     --disable-strip \
     --disable-tpm \
     --enable-trace-backend=dtrace \
+    --enable-uuid \
     --disable-vde \
-    --disable-vhdx \
+    --enable-vhdx \
     --disable-vhost-scsi \
     --disable-virtfs \
     --disable-vnc-jpeg \
     --disable-vte \
-    --disable-vnc-png \
-    --disable-vnc-sasl \
+    --enable-vnc-png \
+    --enable-vnc-sasl \
     --enable-werror \
     --disable-xen \
     --disable-xfsctl \
     --${have_fdt}-fdt \
-    --disable-glusterfs \
-    --enable-guest-agent \
-    --disable-numa \
-    --disable-rbd \
-    --disable-rdma \
-    --disable-seccomp \
-    --disable-spice \
-    --disable-usb-redir \
+    --${have_gluster}-glusterfs \
+    --${have_guest_agent}-guest-agent \
+    --${have_numa}-numa \
+    --${have_rbd}-rbd \
+    --${have_rdma}-rdma \
+    --${have_seccomp}-seccomp \
+    --${have_spice}-spice \
+    --${have_usbredir}-usb-redir \
     --${have_tcmalloc}-tcmalloc \
-    --disable-system \
-    --disable-tools \
+    --audio-drv-list=pa,alsa \
+    --block-drv-rw-whitelist=qcow2,raw,file,host_device,nbd,iscsi,${gluster_driver}${rbd_driver}blkdebug \
+    --block-drv-ro-whitelist=vmdk,vhdx,vpc,https,ssh \
     "$@"

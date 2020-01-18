@@ -9,7 +9,6 @@
  * This work is licensed under the terms of the GNU GPL version 2.
  * See the COPYING file in the top-level directory.
  */
-#include "qemu/osdep.h"
 #include "hw/isa/i8259_internal.h"
 #include "hw/i386/apic_internal.h"
 #include "sysemu/kvm.h"
@@ -92,7 +91,7 @@ static void kvm_pic_put(PICCommonState *s)
 
     ret = kvm_vm_ioctl(kvm_state, KVM_SET_IRQCHIP, &chip);
     if (ret < 0) {
-        fprintf(stderr, "KVM_SET_IRQCHIP failed: %s\n", strerror(ret));
+        fprintf(stderr, "KVM_GET_IRQCHIP failed: %s\n", strerror(ret));
         abort();
     }
 }
@@ -111,7 +110,6 @@ static void kvm_pic_set_irq(void *opaque, int irq, int level)
 {
     int delivered;
 
-    pic_stat_update_irq(irq, level);
     delivered = kvm_set_irq(kvm_state, irq, level);
     apic_report_irq_delivered(delivered);
 }
@@ -142,7 +140,8 @@ static void kvm_i8259_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->reset     = kvm_pic_reset;
-    device_class_set_parent_realize(dc, kvm_pic_realize, &kpc->parent_realize);
+    kpc->parent_realize = dc->realize;
+    dc->realize   = kvm_pic_realize;
     k->pre_save   = kvm_pic_get;
     k->post_load  = kvm_pic_put;
 }

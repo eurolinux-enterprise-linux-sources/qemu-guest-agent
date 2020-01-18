@@ -22,20 +22,8 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "keymaps.h"
 #include "sysemu/sysemu.h"
-#include "trace.h"
-#include "qemu/error-report.h"
-
-struct keysym2code {
-    uint32_t count;
-    uint16_t keycodes[4];
-};
-
-struct kbd_layout_t {
-    GHashTable *hash;
-};
 
 static int get_keysym(const name2keysym_t *table,
                       const char *name)
@@ -57,26 +45,50 @@ static int get_keysym(const name2keysym_t *table,
 }
 
 
-static void add_keysym(char *line, int keysym, int keycode, kbd_layout_t *k)
-{
-    struct keysym2code *keysym2code;
-
-    keysym2code = g_hash_table_lookup(k->hash, GINT_TO_POINTER(keysym));
-    if (keysym2code) {
-        if (keysym2code->count < ARRAY_SIZE(keysym2code->keycodes)) {
-            keysym2code->keycodes[keysym2code->count++] = keycode;
-        } else {
-            warn_report("more than %zd keycodes for keysym %d",
-                        ARRAY_SIZE(keysym2code->keycodes), keysym);
+static void add_to_key_range(struct key_range **krp, int code) {
+    struct key_range *kr;
+    for (kr = *krp; kr; kr = kr->next) {
+        if (code >= kr->start && code <= kr->end) {
+            break;
         }
-        return;
+        if (code == kr->start - 1) {
+            kr->start--;
+            break;
+        }
+        if (code == kr->end + 1) {
+            kr->end++;
+            break;
+        }
     }
+    if (kr == NULL) {
+        kr = g_malloc0(sizeof(*kr));
+        kr->start = kr->end = code;
+        kr->next = *krp;
+        *krp = kr;
+    }
+}
 
-    keysym2code = g_new0(struct keysym2code, 1);
-    keysym2code->keycodes[0] = keycode;
-    keysym2code->count = 1;
-    g_hash_table_replace(k->hash, GINT_TO_POINTER(keysym), keysym2code);
-    trace_keymap_add(keysym, keycode, line);
+static void add_keysym(char *line, int keysym, int keycode, kbd_layout_t *k) {
+    if (keysym < MAX_NORMAL_KEYCODE) {
+        /* fprintf(stderr,"Setting keysym %s (%d) to %d\n",
+                   line, keysym, keycode); */
+        k->keysym2keycode[keysym] = keycode;
+    } else {
+        if (k->extra_count >= MAX_EXTRA_COUNT) {
+            fprintf(stderr, "Warning: Could not assign keysym %s (0x%x)"
+                    " because of memory constraints.\n", line, keysym);
+        } else {
+#if 0
+            fprintf(stderr, "Setting %d: %d,%d\n",
+                    k->extra_count, keysym, keycode);
+#endif
+            k->keysym2keycode_extra[k->extra_count].
+            keysym = keysym;
+            k->keysym2keycode_extra[k->extra_count].
+            keycode = keycode;
+            k->extra_count++;
+        }
+    }
 }
 
 static kbd_layout_t *parse_keyboard_layout(const name2keysym_t *table,
@@ -86,11 +98,9 @@ static kbd_layout_t *parse_keyboard_layout(const name2keysym_t *table,
     FILE *f;
     char * filename;
     char line[1024];
-    char keyname[64];
     int len;
 
     filename = qemu_find_file(QEMU_FILE_TYPE_KEYMAP, language);
-    trace_keymap_parse(filename);
     f = filename ? fopen(filename, "r") : NULL;
     g_free(filename);
     if (!f) {
@@ -100,7 +110,6 @@ static kbd_layout_t *parse_keyboard_layout(const name2keysym_t *table,
 
     if (!k) {
         k = g_new0(kbd_layout_t, 1);
-        k->hash = g_hash_table_new(NULL, NULL);
     }
 
     for(;;) {
@@ -120,22 +129,26 @@ static kbd_layout_t *parse_keyboard_layout(const name2keysym_t *table,
         if (!strncmp(line, "include ", 8)) {
             parse_keyboard_layout(table, line + 8, k);
         } else {
-            int offset = 0;
-            while (line[offset] != 0 &&
-                   line[offset] != ' ' &&
-                   offset < sizeof(keyname) - 1) {
-                keyname[offset] = line[offset];
-                offset++;
+            char *end_of_keysym = line;
+            while (*end_of_keysym != 0 && *end_of_keysym != ' ') {
+                end_of_keysym++;
             }
-            keyname[offset] = 0;
-            if (strlen(keyname)) {
+            if (*end_of_keysym) {
                 int keysym;
-                keysym = get_keysym(table, keyname);
+                *end_of_keysym = 0;
+                keysym = get_keysym(table, line);
                 if (keysym == 0) {
-                    /* warn_report("unknown keysym %s", line);*/
+                    /* fprintf(stderr, "Warning: unknown keysym %s\n", line);*/
                 } else {
-                    const char *rest = line + offset + 1;
+                    const char *rest = end_of_keysym + 1;
                     int keycode = strtol(rest, NULL, 0);
+
+                    if (strstr(rest, "numlock")) {
+                        add_to_key_range(&k->keypad_range, keycode);
+                        add_to_key_range(&k->numlock_range, keysym);
+                        /* fprintf(stderr, "keypad keysym %04x keycode %d\n",
+                                   keysym, keycode); */
+                    }
 
                     if (strstr(rest, "shift")) {
                         keycode |= SCANCODE_SHIFT;
@@ -151,10 +164,10 @@ static kbd_layout_t *parse_keyboard_layout(const name2keysym_t *table,
 
                     if (strstr(rest, "addupper")) {
                         char *c;
-                        for (c = keyname; *c; c++) {
+                        for (c = line; *c; c++) {
                             *c = qemu_toupper(*c);
                         }
-                        keysym = get_keysym(table, keyname);
+                        keysym = get_keysym(table, line);
                         if (keysym) {
                             add_keysym(line, keysym,
                                        keycode | SCANCODE_SHIFT, k);
@@ -169,79 +182,59 @@ static kbd_layout_t *parse_keyboard_layout(const name2keysym_t *table,
 }
 
 
-kbd_layout_t *init_keyboard_layout(const name2keysym_t *table,
-                                   const char *language)
+void *init_keyboard_layout(const name2keysym_t *table, const char *language)
 {
     return parse_keyboard_layout(table, language, NULL);
 }
 
 
-int keysym2scancode(kbd_layout_t *k, int keysym,
-                    bool shift, bool altgr, bool ctrl)
+int keysym2scancode(void *kbd_layout, int keysym)
 {
-    static const uint32_t mask =
-        SCANCODE_SHIFT | SCANCODE_ALTGR | SCANCODE_CTRL;
-    uint32_t mods, i;
-    struct keysym2code *keysym2code;
-
+    kbd_layout_t *k = kbd_layout;
+    if (keysym < MAX_NORMAL_KEYCODE) {
+        if (k->keysym2keycode[keysym] == 0) {
+            fprintf(stderr, "Warning: no scancode found for keysym %d\n",
+                    keysym);
+        }
+        return k->keysym2keycode[keysym];
+    } else {
+        int i;
 #ifdef XK_ISO_Left_Tab
-    if (keysym == XK_ISO_Left_Tab) {
-        keysym = XK_Tab;
-    }
+        if (keysym == XK_ISO_Left_Tab) {
+            keysym = XK_Tab;
+        }
 #endif
-
-    keysym2code = g_hash_table_lookup(k->hash, GINT_TO_POINTER(keysym));
-    if (!keysym2code) {
-        trace_keymap_unmapped(keysym);
-        warn_report("no scancode found for keysym %d", keysym);
-        return 0;
-    }
-
-    if (keysym2code->count == 1) {
-        return keysym2code->keycodes[0];
-    }
-
-    /*
-     * We have multiple keysym -> keycode mappings.
-     *
-     * Check whenever we find one mapping where the modifier state of
-     * the mapping matches the current user interface modifier state.
-     * If so, prefer that one.
-     */
-    mods = 0;
-    if (shift) {
-        mods |= SCANCODE_SHIFT;
-    }
-    if (altgr) {
-        mods |= SCANCODE_ALTGR;
-    }
-    if (ctrl) {
-        mods |= SCANCODE_CTRL;
-    }
-
-    for (i = 0; i < keysym2code->count; i++) {
-        if ((keysym2code->keycodes[i] & mask) == mods) {
-            return keysym2code->keycodes[i];
+        for (i = 0; i < k->extra_count; i++) {
+            if (k->keysym2keycode_extra[i].keysym == keysym) {
+                return k->keysym2keycode_extra[i].keycode;
+            }
         }
     }
-    return keysym2code->keycodes[0];
+    return 0;
 }
 
-int keycode_is_keypad(kbd_layout_t *k, int keycode)
+int keycode_is_keypad(void *kbd_layout, int keycode)
 {
-    if (keycode >= 0x47 && keycode <= 0x53) {
-        return true;
+    kbd_layout_t *k = kbd_layout;
+    struct key_range *kr;
+
+    for (kr = k->keypad_range; kr; kr = kr->next) {
+        if (keycode >= kr->start && keycode <= kr->end) {
+            return 1;
+        }
     }
-    return false;
+    return 0;
 }
 
-int keysym_is_numlock(kbd_layout_t *k, int keysym)
+int keysym_is_numlock(void *kbd_layout, int keysym)
 {
-    switch (keysym) {
-    case 0xffb0 ... 0xffb9:  /* KP_0 .. KP_9 */
-    case 0xffac:             /* KP_Separator */
-    case 0xffae:             /* KP_Decimal   */
-        return true;
+    kbd_layout_t *k = kbd_layout;
+    struct key_range *kr;
+
+    for (kr = k->numlock_range; kr; kr = kr->next) {
+        if (keysym >= kr->start && keysym <= kr->end) {
+            return 1;
+        }
     }
-    return false;
+    return 0;
 }

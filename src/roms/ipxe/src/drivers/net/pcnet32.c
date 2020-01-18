@@ -414,7 +414,8 @@ pcnet32_chip_detect ( struct pcnet32_private *priv )
 	if (fset) {
 		a->write_bcr ( ioaddr, 18,
 			( a->read_bcr ( ioaddr, 18 ) | 0x0860 ) );
-		a->write_csr ( ioaddr, 80, 0x0c00 );
+		a->write_csr ( ioaddr, 80,
+			( a->read_csr ( ioaddr, 80 ) & 0x0C00) | 0x0C00 );
 	}
 
 	priv->full_duplex = fdx;

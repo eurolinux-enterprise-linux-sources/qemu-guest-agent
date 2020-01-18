@@ -19,7 +19,8 @@
  */
 
 
-#include "../../include/hw/nvram/fw_cfg_keys.h"
+#define NO_QEMU_PROTOS
+#include "../../include/hw/nvram/fw_cfg.h"
 
 #define BIOS_CFG_IOPORT_CFG	0x510
 #define BIOS_CFG_IOPORT_DATA	0x511

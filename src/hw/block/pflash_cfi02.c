@@ -35,10 +35,8 @@
  * It does not implement multiple sectors erase
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/block/flash.h"
-#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "sysemu/block-backend.h"
 #include "exec/address-spaces.h"
@@ -57,6 +55,7 @@ do {                                                       \
 
 #define PFLASH_LAZY_ROMD_THRESHOLD 42
 
+#define TYPE_CFI_PFLASH02 "cfi.pflash02"
 #define CFI_PFLASH02(obj) OBJECT_CHECK(pflash_t, (obj), TYPE_CFI_PFLASH02)
 
 struct pflash_t {
@@ -83,6 +82,7 @@ struct pflash_t {
     uint16_t ident3;
     uint16_t unlock_addr0;
     uint16_t unlock_addr1;
+    uint8_t cfi_len;
     uint8_t cfi_table[0x52];
     QEMUTimer *timer;
     /* The device replicates the flash memory across its memory space.  Emulate
@@ -234,11 +234,10 @@ static uint32_t pflash_read (pflash_t *pfl, hwaddr offset,
         break;
     case 0x98:
         /* CFI query mode */
-        if (boff < sizeof(pfl->cfi_table)) {
-            ret = pfl->cfi_table[boff];
-        } else {
+        if (boff > pfl->cfi_len)
             ret = 0;
-        }
+        else
+            ret = pfl->cfi_table[boff];
         break;
     }
 
@@ -252,11 +251,11 @@ static void pflash_update(pflash_t *pfl, int offset,
     int offset_end;
     if (pfl->blk) {
         offset_end = offset + size;
-        /* widen to sector boundaries */
-        offset = QEMU_ALIGN_DOWN(offset, BDRV_SECTOR_SIZE);
-        offset_end = QEMU_ALIGN_UP(offset_end, BDRV_SECTOR_SIZE);
-        blk_pwrite(pfl->blk, offset, pfl->storage + offset,
-                   offset_end - offset, 0);
+        /* round to sectors */
+        offset = offset >> 9;
+        offset_end = (offset_end + 511) >> 9;
+        blk_write(pfl->blk, offset, pfl->storage + (offset << 9),
+                  offset_end - offset);
     }
 }
 
@@ -431,8 +430,8 @@ static void pflash_write (pflash_t *pfl, hwaddr offset,
             }
             pfl->status = 0x00;
             /* Let's wait 5 seconds before chip erase is done */
-            timer_mod(pfl->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                      (NANOSECONDS_PER_SECOND * 5));
+            timer_mod(pfl->timer,
+                           qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (get_ticks_per_sec() * 5));
             break;
         case 0x30:
             /* Sector erase */
@@ -446,8 +445,8 @@ static void pflash_write (pflash_t *pfl, hwaddr offset,
             }
             pfl->status = 0x00;
             /* Let's wait 1/2 second before sector erase is done */
-            timer_mod(pfl->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                      (NANOSECONDS_PER_SECOND / 2));
+            timer_mod(pfl->timer,
+                           qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (get_ticks_per_sec() / 2));
             break;
         default:
             DPRINTF("%s: invalid command %02x (wc 5)\n", __func__, cmd);
@@ -600,19 +599,6 @@ static void pflash_cfi02_realize(DeviceState *dev, Error **errp)
     int ret;
     Error *local_err = NULL;
 
-    if (pfl->sector_len == 0) {
-        error_setg(errp, "attribute \"sector-length\" not specified or zero.");
-        return;
-    }
-    if (pfl->nb_blocs == 0) {
-        error_setg(errp, "attribute \"num-blocks\" not specified or zero.");
-        return;
-    }
-    if (pfl->name == NULL) {
-        error_setg(errp, "attribute \"name\" not specified.");
-        return;
-    }
-
     chip_len = pfl->sector_len * pfl->nb_blocs;
     /* XXX: to be fixed */
 #if 0
@@ -629,24 +615,12 @@ static void pflash_cfi02_realize(DeviceState *dev, Error **errp)
         return;
     }
 
+    vmstate_register_ram(&pfl->orig_mem, DEVICE(pfl));
     pfl->storage = memory_region_get_ram_ptr(&pfl->orig_mem);
     pfl->chip_len = chip_len;
-
-    if (pfl->blk) {
-        uint64_t perm;
-        pfl->ro = blk_is_read_only(pfl->blk);
-        perm = BLK_PERM_CONSISTENT_READ | (pfl->ro ? 0 : BLK_PERM_WRITE);
-        ret = blk_set_perm(pfl->blk, perm, BLK_PERM_ALL, errp);
-        if (ret < 0) {
-            return;
-        }
-    } else {
-        pfl->ro = 0;
-    }
-
     if (pfl->blk) {
         /* read the initial flash content */
-        ret = blk_pread(pfl->blk, 0, pfl->storage, chip_len);
+        ret = blk_read(pfl->blk, 0, pfl->storage, chip_len >> 9);
         if (ret < 0) {
             vmstate_unregister_ram(&pfl->orig_mem, DEVICE(pfl));
             error_setg(errp, "failed to read the initial flash content");
@@ -658,11 +632,18 @@ static void pflash_cfi02_realize(DeviceState *dev, Error **errp)
     pfl->rom_mode = 1;
     sysbus_init_mmio(SYS_BUS_DEVICE(dev), &pfl->mem);
 
+    if (pfl->blk) {
+        pfl->ro = blk_is_read_only(pfl->blk);
+    } else {
+        pfl->ro = 0;
+    }
+
     pfl->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, pflash_timer, pfl);
     pfl->wcycle = 0;
     pfl->cmd = 0;
     pfl->status = 0;
     /* Hardcoded CFI table (mostly from SG29 Spansion flash) */
+    pfl->cfi_len = 0x52;
     /* Standard "QRY" string */
     pfl->cfi_table[0x10] = 'Q';
     pfl->cfi_table[0x11] = 'R';

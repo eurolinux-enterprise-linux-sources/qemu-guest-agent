@@ -50,28 +50,30 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 int imgverify ( struct image *image, struct image *signature,
 		const char *name ) {
-	struct asn1_cursor *data;
+	size_t len;
+	void *data;
 	struct cms_signature *sig;
 	struct cms_signer_info *info;
 	time_t now;
-	int next;
 	int rc;
 
 	/* Mark image as untrusted */
 	image_untrust ( image );
 
-	/* Get raw signature data */
-	next = image_asn1 ( signature, 0, &data );
-	if ( next < 0 ) {
-		rc = next;
-		goto err_asn1;
+	/* Copy signature to internal memory */
+	len = signature->len;
+	data = malloc ( len );
+	if ( ! data ) {
+		rc = -ENOMEM;
+		goto err_alloc;
 	}
+	copy_from_user ( data, signature->data, 0, len );
 
 	/* Parse signature */
-	if ( ( rc = cms_signature ( data->data, data->len, &sig ) ) != 0 )
+	if ( ( rc = cms_signature ( data, len, &sig ) ) != 0 )
 		goto err_parse;
 
-	/* Free raw signature data */
+	/* Free internal copy of signature */
 	free ( data );
 	data = NULL;
 
@@ -105,7 +107,7 @@ int imgverify ( struct image *image, struct image *signature,
 	cms_put ( sig );
  err_parse:
 	free ( data );
- err_asn1:
+ err_alloc:
 	syslog ( LOG_ERR, "Image \"%s\" signature bad: %s\n",
 		 image->name, strerror ( rc ) );
 	return rc;

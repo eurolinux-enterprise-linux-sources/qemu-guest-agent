@@ -33,9 +33,12 @@ along with this program; if not, see <http://www.gnu.org/licenses/>. */
  */
 
 
-#include "qemu/osdep.h"
+#include <stdio.h>
 #define STATIC_TABLE
 #define DEFINE_TABLE
+
+#define TRUE   1
+#define FALSE  0
 
 #ifndef MICROBLAZE_OPC
 #define MICROBLAZE_OPC
@@ -159,7 +162,7 @@ enum microblaze_instr_type {
 #define MIN_PVR_REGNUM 0
 #define MAX_PVR_REGNUM 15
 
-/* 32 is REG_PC */
+#define REG_PC  32 /* PC */
 #define REG_MSR 33 /* machine status reg */
 #define REG_EAR 35 /* Exception reg */
 #define REG_ESR 37 /* Exception reg */
@@ -272,7 +275,7 @@ enum microblaze_instr_type {
 
 #define MAX_OPCODES 280
 
-static const struct op_code_struct {
+static struct op_code_struct {
   const char *name;
   short inst_type; /* registers and immediate values involved */
   short inst_offset_type; /* immediate vals offset from PC? (= 1 for branches) */
@@ -596,6 +599,10 @@ static char * get_field_imm15 (long instr);
 #if 0
 static char * get_field_unsigned_imm (long instr);
 #endif
+char * get_field_special (long instr, struct op_code_struct * op);
+unsigned long read_insn_microblaze (bfd_vma memaddr, 
+		      struct disassemble_info *info,
+		      struct op_code_struct **opr);
 
 static char *
 get_field (long instr, long mask, unsigned short low)
@@ -660,8 +667,8 @@ get_field_unsigned_imm (long instr)
   }
 */
 
-static char *
-get_field_special(long instr, const struct op_code_struct *op)
+char *
+get_field_special (long instr, struct op_code_struct * op)
 {
    char tmpstr[25];
    char spr[6];
@@ -725,14 +732,14 @@ get_field_special(long instr, const struct op_code_struct *op)
    return(strdup(tmpstr));
 }
 
-static unsigned long
+unsigned long
 read_insn_microblaze (bfd_vma memaddr, 
 		      struct disassemble_info *info,
-		      const struct op_code_struct **opr)
+		      struct op_code_struct **opr)
 {
   unsigned char       ibytes[4];
   int                 status;
-  const struct op_code_struct *op;
+  struct op_code_struct * op;
   unsigned long inst;
 
   status = info->read_memory_func (memaddr, ibytes, 4, info);
@@ -744,11 +751,9 @@ read_insn_microblaze (bfd_vma memaddr,
     }
 
   if (info->endian == BFD_ENDIAN_BIG)
-    inst = ((unsigned)ibytes[0] << 24) | (ibytes[1] << 16)
-      | (ibytes[2] << 8) | ibytes[3];
+    inst = (ibytes[0] << 24) | (ibytes[1] << 16) | (ibytes[2] << 8) | ibytes[3];
   else if (info->endian == BFD_ENDIAN_LITTLE)
-    inst = ((unsigned)ibytes[3] << 24) | (ibytes[2] << 16)
-      | (ibytes[1] << 8) | ibytes[0];
+    inst = (ibytes[3] << 24) | (ibytes[2] << 16) | (ibytes[1] << 8) | ibytes[0];
   else
     abort ();
 
@@ -768,7 +773,7 @@ print_insn_microblaze (bfd_vma memaddr, struct disassemble_info * info)
   fprintf_function    fprintf_func = info->fprintf_func;
   void *              stream = info->stream;
   unsigned long       inst, prev_inst;
-  const struct op_code_struct *op, *pop;
+  struct op_code_struct * op, *pop;
   int                 immval = 0;
   bfd_boolean         immfound = FALSE;
   static bfd_vma prev_insn_addr = -1; /*init the prev insn addr */

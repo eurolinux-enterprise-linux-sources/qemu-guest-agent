@@ -38,8 +38,7 @@
  * terms and conditions of the copyright.
  */
 
-#include "qemu/osdep.h"
-#include "slirp.h"
+#include <slirp.h>
 
 /* patchable/settable parameters for tcp */
 /* Don't do rfc1323 performance enhancements */
@@ -76,30 +75,13 @@ tcp_template(struct tcpcb *tp)
 	register struct tcpiphdr *n = &tp->t_template;
 
 	n->ti_mbuf = NULL;
-	memset(&n->ti, 0, sizeof(n->ti));
-	n->ti_x0 = 0;
-	switch (so->so_ffamily) {
-	case AF_INET:
-	    n->ti_pr = IPPROTO_TCP;
-	    n->ti_len = htons(sizeof(struct tcphdr));
-	    n->ti_src = so->so_faddr;
-	    n->ti_dst = so->so_laddr;
-	    n->ti_sport = so->so_fport;
-	    n->ti_dport = so->so_lport;
-	    break;
-
-	case AF_INET6:
-	    n->ti_nh6 = IPPROTO_TCP;
-	    n->ti_len = htons(sizeof(struct tcphdr));
-	    n->ti_src6 = so->so_faddr6;
-	    n->ti_dst6 = so->so_laddr6;
-	    n->ti_sport = so->so_fport6;
-	    n->ti_dport = so->so_lport6;
-	    break;
-
-	default:
-	    g_assert_not_reached();
-	}
+	n->ti_x1 = 0;
+	n->ti_pr = IPPROTO_TCP;
+	n->ti_len = htons(sizeof (struct tcpiphdr) - sizeof (struct ip));
+	n->ti_src = so->so_faddr;
+	n->ti_dst = so->so_laddr;
+	n->ti_sport = so->so_fport;
+	n->ti_dport = so->so_lport;
 
 	n->ti_seq = 0;
 	n->ti_ack = 0;
@@ -126,7 +108,7 @@ tcp_template(struct tcpcb *tp)
  */
 void
 tcp_respond(struct tcpcb *tp, struct tcpiphdr *ti, struct mbuf *m,
-            tcp_seq ack, tcp_seq seq, int flags, unsigned short af)
+            tcp_seq ack, tcp_seq seq, int flags)
 {
 	register int tlen;
 	int win = 0;
@@ -148,16 +130,6 @@ tcp_respond(struct tcpcb *tp, struct tcpiphdr *ti, struct mbuf *m,
 		m->m_data += IF_MAXLINKHDR;
 		*mtod(m, struct tcpiphdr *) = *ti;
 		ti = mtod(m, struct tcpiphdr *);
-		switch (af) {
-		case AF_INET:
-		    ti->ti.ti_i4.ih_x1 = 0;
-		    break;
-		case AF_INET6:
-		    ti->ti.ti_i6.ih_x1 = 0;
-		    break;
-		default:
-		    g_assert_not_reached();
-		}
 		flags = TH_ACK;
 	} else {
 		/*
@@ -169,26 +141,16 @@ tcp_respond(struct tcpcb *tp, struct tcpiphdr *ti, struct mbuf *m,
 		m->m_len = sizeof (struct tcpiphdr);
 		tlen = 0;
 #define xchg(a,b,type) { type t; t=a; a=b; b=t; }
-		switch (af) {
-		case AF_INET:
-		    xchg(ti->ti_dst.s_addr, ti->ti_src.s_addr, uint32_t);
-		    xchg(ti->ti_dport, ti->ti_sport, uint16_t);
-		    break;
-		case AF_INET6:
-		    xchg(ti->ti_dst6, ti->ti_src6, struct in6_addr);
-		    xchg(ti->ti_dport, ti->ti_sport, uint16_t);
-		    break;
-		default:
-		    g_assert_not_reached();
-		}
+		xchg(ti->ti_dst.s_addr, ti->ti_src.s_addr, uint32_t);
+		xchg(ti->ti_dport, ti->ti_sport, uint16_t);
 #undef xchg
 	}
 	ti->ti_len = htons((u_short)(sizeof (struct tcphdr) + tlen));
 	tlen += sizeof (struct tcpiphdr);
 	m->m_len = tlen;
 
-	ti->ti_mbuf = NULL;
-	ti->ti_x0 = 0;
+        ti->ti_mbuf = NULL;
+	ti->ti_x1 = 0;
 	ti->ti_seq = htonl(seq);
 	ti->ti_ack = htonl(ack);
 	ti->ti_x2 = 0;
@@ -201,49 +163,14 @@ tcp_respond(struct tcpcb *tp, struct tcpiphdr *ti, struct mbuf *m,
 	ti->ti_urp = 0;
 	ti->ti_sum = 0;
 	ti->ti_sum = cksum(m, tlen);
+	((struct ip *)ti)->ip_len = tlen;
 
-	struct tcpiphdr tcpiph_save = *(mtod(m, struct tcpiphdr *));
-	struct ip *ip;
-	struct ip6 *ip6;
+	if(flags & TH_RST)
+	  ((struct ip *)ti)->ip_ttl = MAXTTL;
+	else
+	  ((struct ip *)ti)->ip_ttl = IPDEFTTL;
 
-	switch (af) {
-	case AF_INET:
-	    m->m_data += sizeof(struct tcpiphdr) - sizeof(struct tcphdr)
-	                                         - sizeof(struct ip);
-	    m->m_len  -= sizeof(struct tcpiphdr) - sizeof(struct tcphdr)
-	                                         - sizeof(struct ip);
-	    ip = mtod(m, struct ip *);
-	    ip->ip_len = m->m_len;
-	    ip->ip_dst = tcpiph_save.ti_dst;
-	    ip->ip_src = tcpiph_save.ti_src;
-	    ip->ip_p = tcpiph_save.ti_pr;
-
-	    if (flags & TH_RST) {
-	        ip->ip_ttl = MAXTTL;
-	    } else {
-	        ip->ip_ttl = IPDEFTTL;
-	    }
-
-	    ip_output(NULL, m);
-	    break;
-
-	case AF_INET6:
-	    m->m_data += sizeof(struct tcpiphdr) - sizeof(struct tcphdr)
-	                                         - sizeof(struct ip6);
-	    m->m_len  -= sizeof(struct tcpiphdr) - sizeof(struct tcphdr)
-	                                         - sizeof(struct ip6);
-	    ip6 = mtod(m, struct ip6 *);
-	    ip6->ip_pl = tcpiph_save.ti_len;
-	    ip6->ip_dst = tcpiph_save.ti_dst6;
-	    ip6->ip_src = tcpiph_save.ti_src6;
-	    ip6->ip_nh = tcpiph_save.ti_nh6;
-
-	    ip6_output(NULL, m, 0);
-	    break;
-
-	default:
-	    g_assert_not_reached();
-	}
+	(void) ip_output((struct socket *)0, m);
 }
 
 /*
@@ -262,7 +189,7 @@ tcp_newtcpcb(struct socket *so)
 
 	memset((char *) tp, 0, sizeof(struct tcpcb));
 	tp->seg_next = tp->seg_prev = (struct tcpiphdr*)tp;
-	tp->t_maxseg = (so->so_ffamily == AF_INET) ? TCP_MSS : TCP6_MSS;
+	tp->t_maxseg = TCP_MSS;
 
 	tp->t_flags = TCP_DO_RFC1323 ? (TF_REQ_SCALE|TF_REQ_TSTMP) : 0;
 	tp->t_socket = so;
@@ -365,10 +292,6 @@ tcp_sockclosed(struct tcpcb *tp)
 	DEBUG_CALL("tcp_sockclosed");
 	DEBUG_ARG("tp = %p", tp);
 
-	if (!tp) {
-		return;
-	}
-
 	switch (tp->t_state) {
 
 	case TCPS_CLOSED:
@@ -387,7 +310,8 @@ tcp_sockclosed(struct tcpcb *tp)
 		tp->t_state = TCPS_LAST_ACK;
 		break;
 	}
-	tcp_output(tp);
+	if (tp)
+		tcp_output(tp);
 }
 
 /*
@@ -400,29 +324,42 @@ tcp_sockclosed(struct tcpcb *tp)
  * nonblocking.  Connect returns after the SYN is sent, and does
  * not wait for ACK+SYN.
  */
-int tcp_fconnect(struct socket *so, unsigned short af)
+int tcp_fconnect(struct socket *so)
 {
+  Slirp *slirp = so->slirp;
   int ret=0;
 
   DEBUG_CALL("tcp_fconnect");
   DEBUG_ARG("so = %p", so);
 
-  ret = so->s = qemu_socket(af, SOCK_STREAM, 0);
-  if (ret >= 0) {
+  if( (ret = so->s = qemu_socket(AF_INET,SOCK_STREAM,0)) >= 0) {
     int opt, s=so->s;
-    struct sockaddr_storage addr;
+    struct sockaddr_in addr;
 
     qemu_set_nonblock(s);
     socket_set_fast_reuse(s);
     opt = 1;
     qemu_setsockopt(s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(opt));
 
-    addr = so->fhost.ss;
-    DEBUG_CALL(" connect()ing")
-    sotranslate_out(so, &addr);
+    addr.sin_family = AF_INET;
+    if ((so->so_faddr.s_addr & slirp->vnetwork_mask.s_addr) ==
+        slirp->vnetwork_addr.s_addr) {
+      /* It's an alias */
+      if (so->so_faddr.s_addr == slirp->vnameserver_addr.s_addr) {
+	if (get_dns_addr(&addr.sin_addr) < 0)
+	  addr.sin_addr = loopback_addr;
+      } else {
+	addr.sin_addr = loopback_addr;
+      }
+    } else
+      addr.sin_addr = so->so_faddr;
+    addr.sin_port = so->so_fport;
 
+    DEBUG_MISC((dfd, " connect()ing, addr.sin_port=%d, "
+		"addr.sin_addr.s_addr=%.16s\n",
+		ntohs(addr.sin_port), inet_ntoa(addr.sin_addr)));
     /* We don't care what port we get */
-    ret = connect(s, (struct sockaddr *)&addr, sockaddr_size(&addr));
+    ret = connect(s,(struct sockaddr *)&addr,sizeof (addr));
 
     /*
      * If it's not in progress, it failed, so we just return 0,
@@ -450,8 +387,8 @@ void tcp_connect(struct socket *inso)
 {
     Slirp *slirp = inso->slirp;
     struct socket *so;
-    struct sockaddr_storage addr;
-    socklen_t addrlen = sizeof(struct sockaddr_storage);
+    struct sockaddr_in addr;
+    socklen_t addrlen = sizeof(struct sockaddr_in);
     struct tcpcb *tp;
     int s, opt;
 
@@ -476,8 +413,8 @@ void tcp_connect(struct socket *inso)
             free(so); /* NOT sofree */
             return;
         }
-        so->lhost = inso->lhost;
-        so->so_ffamily = inso->so_ffamily;
+        so->so_laddr = inso->so_laddr;
+        so->so_lport = inso->so_lport;
     }
 
     tcp_mss(sototcpcb(so), 0);
@@ -493,8 +430,14 @@ void tcp_connect(struct socket *inso)
     qemu_setsockopt(s, SOL_SOCKET, SO_OOBINLINE, &opt, sizeof(int));
     socket_set_nodelay(s);
 
-    so->fhost.ss = addr;
-    sotranslate_accept(so);
+    so->so_fport = addr.sin_port;
+    so->so_faddr = addr.sin_addr;
+    /* Translate connections from localhost to the real hostname */
+    if (so->so_faddr.s_addr == 0 ||
+        (so->so_faddr.s_addr & loopback_mask) ==
+        (loopback_addr.s_addr & loopback_mask)) {
+        so->so_faddr = slirp->vhost_addr;
+    }
 
     /* Close the accept() socket, set right state */
     if (inso->so_state & SS_FACCEPTONCE) {

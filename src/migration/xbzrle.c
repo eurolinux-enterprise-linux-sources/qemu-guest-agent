@@ -10,9 +10,8 @@
  * See the COPYING file in the top-level directory.
  *
  */
-#include "qemu/osdep.h"
-#include "qemu/cutils.h"
-#include "xbzrle.h"
+#include "qemu-common.h"
+#include "include/migration/migration.h"
 
 /*
   page = zrun nzrun

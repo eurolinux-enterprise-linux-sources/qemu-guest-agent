@@ -99,14 +99,4 @@ static inline void * arp_target_pa ( struct arphdr *arphdr ) {
 	return ( arp_target_ha ( arphdr ) + arphdr->ar_hln );
 }
 
-/** ARP packet length
- *
- * @v arphdr	ARP header
- * @ret len	Length (including header)
- */
-static inline size_t arp_len ( struct arphdr *arphdr ) {
-	return ( sizeof ( *arphdr ) +
-		 ( 2 * ( arphdr->ar_hln + arphdr->ar_pln ) ) );
-}
-
 #endif	/* _IPXE_IF_ARP_H */

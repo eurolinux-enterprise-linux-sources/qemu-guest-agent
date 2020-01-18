@@ -9,7 +9,7 @@
  * This file implements direct PCI assignment to a HVM guest
  */
 
-#include "qemu/osdep.h"
+#include <sys/mman.h>
 
 #include "hw/xen/xen_backend.h"
 #include "xen_pt.h"
@@ -24,9 +24,7 @@
 #define XEN_PT_GFLAGS_SHIFT_DM             9
 #define XEN_PT_GFLAGSSHIFT_DELIV_MODE     12
 #define XEN_PT_GFLAGSSHIFT_TRG_MODE       15
-#define XEN_PT_GFLAGSSHIFT_UNMASKED       16
 
-#define latch(fld) latch[PCI_MSIX_ENTRY_##fld / sizeof(uint32_t)]
 
 /*
  * Helpers
@@ -115,7 +113,9 @@ static int msi_msix_setup(XenPCIPassthroughState *s,
 
     assert((!is_msix && msix_entry == 0) || is_msix);
 
-    if (xen_is_pirq_msi(data)) {
+    if (gvec == 0) {
+        /* if gvec is 0, the guest is asking for a particular pirq that
+         * is passed as dest_id */
         *ppirq = msi_ext_dest_id(addr >> 32) | msi_dest_id(addr);
         if (!*ppirq) {
             /* this probably identifies an misconfiguration of the guest,
@@ -156,8 +156,7 @@ static int msi_msix_update(XenPCIPassthroughState *s,
                            int pirq,
                            bool is_msix,
                            int msix_entry,
-                           int *old_pirq,
-                           bool masked)
+                           int *old_pirq)
 {
     PCIDevice *d = &s->dev;
     uint8_t gvec = msi_vector(data);
@@ -172,8 +171,6 @@ static int msi_msix_update(XenPCIPassthroughState *s,
     if (is_msix) {
         table_addr = s->msix->mmio_base_addr;
     }
-
-    gflags |= masked ? 0 : (1u << XEN_PT_GFLAGSSHIFT_UNMASKED);
 
     rc = xc_domain_update_msi_irq(xen_xc, xen_domid, gvec,
                                   pirq, gflags, table_addr);
@@ -277,10 +274,8 @@ int xen_pt_msi_setup(XenPCIPassthroughState *s)
 int xen_pt_msi_update(XenPCIPassthroughState *s)
 {
     XenPTMSI *msi = s->msi;
-
-    /* Current MSI emulation in QEMU only supports 1 vector */
     return msi_msix_update(s, msi_addr64(msi), msi->data, msi->pirq,
-                           false, 0, &msi->pirq, msi->mask & 1);
+                           false, 0, &msi->pirq);
 }
 
 void xen_pt_msi_disable(XenPCIPassthroughState *s)
@@ -319,8 +314,7 @@ static int msix_set_enable(XenPCIPassthroughState *s, bool enabled)
                            enabled);
 }
 
-static int xen_pt_msix_update_one(XenPCIPassthroughState *s, int entry_nr,
-                                  uint32_t vec_ctrl)
+static int xen_pt_msix_update_one(XenPCIPassthroughState *s, int entry_nr)
 {
     XenPTMSIXEntry *entry = NULL;
     int pirq;
@@ -338,19 +332,6 @@ static int xen_pt_msix_update_one(XenPCIPassthroughState *s, int entry_nr,
 
     pirq = entry->pirq;
 
-    /*
-     * Update the entry addr and data to the latest values only when the
-     * entry is masked or they are all masked, as required by the spec.
-     * Addr and data changes while the MSI-X entry is unmasked get deferred
-     * until the next masked -> unmasked transition.
-     */
-    if (pirq == XEN_PT_UNASSIGNED_PIRQ || s->msix->maskall ||
-        (vec_ctrl & PCI_MSIX_ENTRY_CTRL_MASKBIT)) {
-        entry->addr = entry->latch(LOWER_ADDR) |
-                      ((uint64_t)entry->latch(UPPER_ADDR) << 32);
-        entry->data = entry->latch(DATA);
-    }
-
     rc = msi_msix_setup(s, entry->addr, entry->data, &pirq, true, entry_nr,
                         entry->pirq == XEN_PT_UNASSIGNED_PIRQ);
     if (rc) {
@@ -361,8 +342,7 @@ static int xen_pt_msix_update_one(XenPCIPassthroughState *s, int entry_nr,
     }
 
     rc = msi_msix_update(s, entry->addr, entry->data, pirq, true,
-                         entry_nr, &entry->pirq,
-                         vec_ctrl & PCI_MSIX_ENTRY_CTRL_MASKBIT);
+                         entry_nr, &entry->pirq);
 
     if (!rc) {
         entry->updated = false;
@@ -377,7 +357,7 @@ int xen_pt_msix_update(XenPCIPassthroughState *s)
     int i;
 
     for (i = 0; i < msix->total_entries; i++) {
-        xen_pt_msix_update_one(s, i, msix->msix_entry[i].latch(VECTOR_CTRL));
+        xen_pt_msix_update_one(s, i);
     }
 
     return 0;
@@ -426,14 +406,36 @@ int xen_pt_msix_update_remap(XenPCIPassthroughState *s, int bar_index)
 
 static uint32_t get_entry_value(XenPTMSIXEntry *e, int offset)
 {
-    assert(!(offset % sizeof(*e->latch)));
-    return e->latch[offset / sizeof(*e->latch)];
+    switch (offset) {
+    case PCI_MSIX_ENTRY_LOWER_ADDR:
+        return e->addr & UINT32_MAX;
+    case PCI_MSIX_ENTRY_UPPER_ADDR:
+        return e->addr >> 32;
+    case PCI_MSIX_ENTRY_DATA:
+        return e->data;
+    case PCI_MSIX_ENTRY_VECTOR_CTRL:
+        return e->vector_ctrl;
+    default:
+        return 0;
+    }
 }
 
 static void set_entry_value(XenPTMSIXEntry *e, int offset, uint32_t val)
 {
-    assert(!(offset % sizeof(*e->latch)));
-    e->latch[offset / sizeof(*e->latch)] = val;
+    switch (offset) {
+    case PCI_MSIX_ENTRY_LOWER_ADDR:
+        e->addr = (e->addr & ((uint64_t)UINT32_MAX << 32)) | val;
+        break;
+    case PCI_MSIX_ENTRY_UPPER_ADDR:
+        e->addr = (uint64_t)val << 32 | (e->addr & UINT32_MAX);
+        break;
+    case PCI_MSIX_ENTRY_DATA:
+        e->data = val;
+        break;
+    case PCI_MSIX_ENTRY_VECTOR_CTRL:
+        e->vector_ctrl = val;
+        break;
+    }
 }
 
 static void pci_msix_write(void *opaque, hwaddr addr,
@@ -452,15 +454,12 @@ static void pci_msix_write(void *opaque, hwaddr addr,
     offset = addr % PCI_MSIX_ENTRY_SIZE;
 
     if (offset != PCI_MSIX_ENTRY_VECTOR_CTRL) {
+        const volatile uint32_t *vec_ctrl;
+
         if (get_entry_value(entry, offset) == val
             && entry->pirq != XEN_PT_UNASSIGNED_PIRQ) {
             return;
         }
-
-        entry->updated = true;
-    } else if (msix->enabled && entry->updated &&
-               !(val & PCI_MSIX_ENTRY_CTRL_MASKBIT)) {
-        const volatile uint32_t *vec_ctrl;
 
         /*
          * If Xen intercepts the mask bit access, entry->vec_ctrl may not be
@@ -468,10 +467,26 @@ static void pci_msix_write(void *opaque, hwaddr addr,
          */
         vec_ctrl = s->msix->phys_iomem_base + entry_nr * PCI_MSIX_ENTRY_SIZE
             + PCI_MSIX_ENTRY_VECTOR_CTRL;
-        xen_pt_msix_update_one(s, entry_nr, *vec_ctrl);
+
+        if (msix->enabled && !(*vec_ctrl & PCI_MSIX_ENTRY_CTRL_MASKBIT)) {
+            if (!entry->warned) {
+                entry->warned = true;
+                XEN_PT_ERR(&s->dev, "Can't update msix entry %d since MSI-X is"
+                           " already enabled.\n", entry_nr);
+            }
+            return;
+        }
+
+        entry->updated = true;
     }
 
     set_entry_value(entry, offset, val);
+
+    if (offset == PCI_MSIX_ENTRY_VECTOR_CTRL) {
+        if (msix->enabled && !(val & PCI_MSIX_ENTRY_CTRL_MASKBIT)) {
+            xen_pt_msix_update_one(s, entry_nr);
+        }
+    }
 }
 
 static uint64_t pci_msix_read(void *opaque, hwaddr addr,
@@ -497,12 +512,6 @@ static uint64_t pci_msix_read(void *opaque, hwaddr addr,
     }
 }
 
-static bool pci_msix_accepts(void *opaque, hwaddr addr,
-                             unsigned size, bool is_write)
-{
-    return !(addr & (size - 1));
-}
-
 static const MemoryRegionOps pci_msix_ops = {
     .read = pci_msix_read,
     .write = pci_msix_write,
@@ -511,13 +520,7 @@ static const MemoryRegionOps pci_msix_ops = {
         .min_access_size = 4,
         .max_access_size = 4,
         .unaligned = false,
-        .accepts = pci_msix_accepts
     },
-    .impl = {
-        .min_access_size = 4,
-        .max_access_size = 4,
-        .unaligned = false
-    }
 };
 
 int xen_pt_msix_init(XenPCIPassthroughState *s, uint32_t base)
@@ -542,11 +545,7 @@ int xen_pt_msix_init(XenPCIPassthroughState *s, uint32_t base)
         return -1;
     }
 
-    rc = xen_host_pci_get_word(hd, base + PCI_MSIX_FLAGS, &control);
-    if (rc) {
-        XEN_PT_ERR(d, "Failed to read PCI_MSIX_FLAGS field\n");
-        return rc;
-    }
+    xen_host_pci_get_word(hd, base + PCI_MSIX_FLAGS, &control);
     total_entries = control & PCI_MSIX_FLAGS_QSIZE;
     total_entries += 1;
 
@@ -565,11 +564,7 @@ int xen_pt_msix_init(XenPCIPassthroughState *s, uint32_t base)
                            + XC_PAGE_SIZE - 1)
                           & XC_PAGE_MASK);
 
-    rc = xen_host_pci_get_long(hd, base + PCI_MSIX_TABLE, &table_off);
-    if (rc) {
-        XEN_PT_ERR(d, "Failed to read PCI_MSIX_TABLE field\n");
-        goto error_out;
-    }
+    xen_host_pci_get_long(hd, base + PCI_MSIX_TABLE, &table_off);
     bar_index = msix->bar_index = table_off & PCI_MSIX_FLAGS_BIRMASK;
     table_off = table_off & ~PCI_MSIX_FLAGS_BIRMASK;
     msix->table_base = s->real_device.io_regions[bar_index].base_addr;

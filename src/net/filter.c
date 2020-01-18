@@ -6,8 +6,6 @@
  * later.  See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu-common.h"
 #include "qapi/qmp/qerror.h"
 #include "qemu/error-report.h"
@@ -17,11 +15,7 @@
 #include "net/vhost_net.h"
 #include "qom/object_interfaces.h"
 #include "qemu/iov.h"
-
-static inline bool qemu_can_skip_netfilter(NetFilterState *nf)
-{
-    return !nf->on;
-}
+#include "qapi/string-output-visitor.h"
 
 ssize_t qemu_netfilter_receive(NetFilterState *nf,
                                NetFilterDirection direction,
@@ -31,9 +25,6 @@ ssize_t qemu_netfilter_receive(NetFilterState *nf,
                                int iovcnt,
                                NetPacketSent *sent_cb)
 {
-    if (qemu_can_skip_netfilter(nf)) {
-        return 0;
-    }
     if (nf->direction == direction ||
         nf->direction == NET_FILTER_DIRECTION_ALL) {
         return NETFILTER_GET_CLASS(OBJECT(nf))->receive_iov(
@@ -41,22 +32,6 @@ ssize_t qemu_netfilter_receive(NetFilterState *nf,
     }
 
     return 0;
-}
-
-static NetFilterState *netfilter_next(NetFilterState *nf,
-                                      NetFilterDirection dir)
-{
-    NetFilterState *next;
-
-    if (dir == NET_FILTER_DIRECTION_TX) {
-        /* forward walk through filters */
-        next = QTAILQ_NEXT(nf, next);
-    } else {
-        /* reverse order */
-        next = QTAILQ_PREV(nf, NetFilterHead, next);
-    }
-
-    return next;
 }
 
 ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
@@ -68,7 +43,7 @@ ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
     int ret = 0;
     int direction;
     NetFilterState *nf = opaque;
-    NetFilterState *next = NULL;
+    NetFilterState *next = QTAILQ_NEXT(nf, next);
 
     if (!sender || !sender->peer) {
         /* no receiver, or sender been deleted, no need to pass it further */
@@ -86,7 +61,6 @@ ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
         direction = nf->direction;
     }
 
-    next = netfilter_next(nf, direction);
     while (next) {
         /*
          * if qemu_netfilter_pass_to_next been called, means that
@@ -99,7 +73,7 @@ ssize_t qemu_netfilter_pass_to_next(NetClientState *sender,
         if (ret) {
             return ret;
         }
-        next = netfilter_next(next, direction);
+        next = QTAILQ_NEXT(next, next);
     }
 
     /*
@@ -143,48 +117,15 @@ static void netfilter_set_direction(Object *obj, int direction, Error **errp)
     nf->direction = direction;
 }
 
-static char *netfilter_get_status(Object *obj, Error **errp)
-{
-    NetFilterState *nf = NETFILTER(obj);
-
-    return nf->on ? g_strdup("on") : g_strdup("off");
-}
-
-static void netfilter_set_status(Object *obj, const char *str, Error **errp)
-{
-    NetFilterState *nf = NETFILTER(obj);
-    NetFilterClass *nfc = NETFILTER_GET_CLASS(obj);
-
-    if (strcmp(str, "on") && strcmp(str, "off")) {
-        error_setg(errp, "Invalid value for netfilter status, "
-                         "should be 'on' or 'off'");
-        return;
-    }
-    if (nf->on == !strcmp(str, "on")) {
-        return;
-    }
-    nf->on = !nf->on;
-    if (nf->netdev && nfc->status_changed) {
-        nfc->status_changed(nf, errp);
-    }
-}
-
 static void netfilter_init(Object *obj)
 {
-    NetFilterState *nf = NETFILTER(obj);
-
-    nf->on = true;
-
     object_property_add_str(obj, "netdev",
                             netfilter_get_netdev_id, netfilter_set_netdev_id,
                             NULL);
     object_property_add_enum(obj, "queue", "NetFilterDirection",
-                             &NetFilterDirection_lookup,
+                             NetFilterDirection_lookup,
                              netfilter_get_direction, netfilter_set_direction,
                              NULL);
-    object_property_add_str(obj, "status",
-                            netfilter_get_status, netfilter_set_status,
-                            NULL);
 }
 
 static void netfilter_complete(UserCreatable *uc, Error **errp)
@@ -194,6 +135,10 @@ static void netfilter_complete(UserCreatable *uc, Error **errp)
     NetFilterClass *nfc = NETFILTER_GET_CLASS(uc);
     int queues;
     Error *local_err = NULL;
+    char *str, *info;
+    ObjectProperty *prop;
+    ObjectPropertyIterator *iter;
+    StringOutputVisitor *ov;
 
     if (!nf->netdev_id) {
         error_setg(errp, "Parameter 'netdev' is required");
@@ -201,7 +146,7 @@ static void netfilter_complete(UserCreatable *uc, Error **errp)
     }
 
     queues = qemu_find_net_clients_except(nf->netdev_id, ncs,
-                                          NET_CLIENT_DRIVER_NIC,
+                                          NET_CLIENT_OPTIONS_KIND_NIC,
                                           MAX_QUEUE_NUM);
     if (queues < 1) {
         error_setg(errp, QERR_INVALID_PARAMETER_VALUE, "netdev",
@@ -227,6 +172,24 @@ static void netfilter_complete(UserCreatable *uc, Error **errp)
         }
     }
     QTAILQ_INSERT_TAIL(&nf->netdev->filters, nf, next);
+
+    /* generate info str */
+    iter = object_property_iter_init(OBJECT(nf));
+    while ((prop = object_property_iter_next(iter))) {
+        if (!strcmp(prop->name, "type")) {
+            continue;
+        }
+        ov = string_output_visitor_new(false);
+        object_property_get(OBJECT(nf), string_output_get_visitor(ov),
+                            prop->name, errp);
+        str = string_output_get_string(ov);
+        string_output_visitor_cleanup(ov);
+        info = g_strdup_printf(",%s=%s", prop->name, str);
+        g_strlcat(nf->info_str, info, sizeof(nf->info_str));
+        g_free(str);
+        g_free(info);
+    }
+    object_property_iter_free(iter);
 }
 
 static void netfilter_finalize(Object *obj)
@@ -238,11 +201,9 @@ static void netfilter_finalize(Object *obj)
         nfc->cleanup(nf);
     }
 
-    if (nf->netdev && !QTAILQ_EMPTY(&nf->netdev->filters) &&
-        QTAILQ_IN_USE(nf, next)) {
+    if (nf->netdev && !QTAILQ_EMPTY(&nf->netdev->filters)) {
         QTAILQ_REMOVE(&nf->netdev->filters, nf, next);
     }
-    g_free(nf->netdev_id);
 }
 
 static void netfilter_class_init(ObjectClass *oc, void *data)

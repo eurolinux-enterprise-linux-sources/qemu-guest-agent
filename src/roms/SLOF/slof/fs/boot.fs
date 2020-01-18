@@ -15,26 +15,7 @@
 VARIABLE state-valid false state-valid !
 CREATE go-args 2 cells allot go-args 2 cells erase
 
-4000 CONSTANT bootdev-size
-0 VALUE bootdev-buf
-
 \ \\\\\\\\\\\\\\ Structure/Implementation Dependent Methods
-
-: alloc-bootdev-buf ( -- )
-   bootdev-size alloc-mem ?dup 0= ABORT" Unable to allocate bootdev buffer!"
-   dup bootdev-size erase
-   to bootdev-buf
-;
-
-: free-bootdev-buf ( -- )
-   bootdev-buf bootdev-size free-mem
-   0 to bootdev-buf
-;
-
-: bootdev-string-cat ( addr1 len1 addr2 len2 -- addr1 len1+len2 )
-   dup 3 pick + bootdev-size > ABORT" bootdev size too big!"
-   string-cat
-;
 
 : $bootargs
    bootargs 2@ ?dup IF
@@ -43,23 +24,14 @@ CREATE go-args 2 cells allot go-args 2 cells erase
 ;
 
 : $bootdev ( -- device-name len )
-   alloc-bootdev-buf
-   bootdevice 2@ ?dup IF
-      swap bootdev-buf 2 pick move
-      bootdev-buf swap s"  " bootdev-string-cat
-   ELSE
-      \ use bootdev-buf for concatenating diag mode/boot-device if any
-      drop bootdev-buf 0
-   THEN
+   bootdevice 2@ dup IF s"  " $cat THEN
    s" diagnostic-mode?" evaluate IF
       s" diag-device" evaluate
    ELSE
       s" boot-device" evaluate
    THEN
-   ( bootdev len str len1 )
-   bootdev-string-cat \ concatenate both
+   $cat \ prepend bootdevice setting from vpd-bootlist
    strdup
-   free-bootdev-buf
    ?dup 0= IF
       disable-watchdog
       drop true ABORT" No boot device!"
@@ -79,14 +51,7 @@ CREATE go-args 2 cells allot go-args 2 cells erase
 ' (set-boot-device) to set-boot-device
 
 : (add-boot-device) ( str len -- )	\ Concatenate " str" to "bootdevice"
-   bootdevice 2@ ?dup IF
-      alloc-bootdev-buf
-      swap bootdev-buf 2 pick move
-      bootdev-buf swap s"  " bootdev-string-cat
-      2swap bootdev-string-cat
-   ELSE drop THEN
-   set-boot-device
-   bootdev-buf 0 <> IF free-bootdev-buf THEN
+   bootdevice 2@ ?dup IF $cat-space ELSE drop THEN set-boot-device
 ;
 
 ' (add-boot-device) to add-boot-device
@@ -216,7 +181,6 @@ defer go ( -- )
       \ with watchdog timeout.
       4ec set-watchdog
    THEN
-   2dup " HALT" str= IF 2drop 0 EXIT THEN
    my-self >r current-node @ >r         \ Save my-self
    ." Trying to load: " $bootargs type ."  from: " 2dup type ."  ... "
    2dup open-dev dup IF
@@ -256,19 +220,11 @@ defer go ( -- )
    ELSE
       drop
    THEN
-   set-boot-args
-   save-source  -1 to source-id
-   $bootdev dup #ib ! span ! to ib
-   0 >in !
-   ['] parse-load catch restore-source throw
+   set-boot-args s" parse-load " $bootdev $cat strdup evaluate
 ;
 
 : load-next ( -- success )	\ Continue after go failed
-   load-list 2@ ?dup IF
-      save-source  -1 to source-id
-      dup #ib ! span ! to ib
-      0 >in !
-      ['] parse-load catch restore-source throw
+   load-list 2@ ?dup IF s" parse-load " 2swap $cat strdup evaluate
    ELSE drop false THEN
 ;
 
@@ -311,6 +267,29 @@ read-bootlist
    BEGIN load-next WHILE
       disable-watchdog (go-and-catch)
    REPEAT
+
+   \ When we return from boot print the banner again.
+   .banner
 ;
 
 : load load 0= IF -65 boot-exception-handler THEN ;
+
+\ \\\\ Temporary hacks for backwards compatibility
+: yaboot ." Use 'boot disk' instead " ;
+
+: netboot ( -- rc ) ." Use 'boot net' instead " ;
+
+: netboot-arg ( arg-string -- rc )
+   s" boot net " 2swap $cat (parse-line) $cat
+   evaluate
+;
+
+: netload ( -- rc ) (parse-line)
+   load-base-override >r flash-load-base to load-base-override
+   s" load net:" strdup 2swap $cat strdup evaluate
+   r> to load-base-override
+   load-size
+;
+
+: neteval ( -- ) FLASH-LOAD-BASE netload evaluate ;
+

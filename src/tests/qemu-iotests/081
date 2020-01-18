@@ -25,6 +25,7 @@ seq=`basename $0`
 echo "QA output created by $seq"
 
 here=`pwd`
+tmp=/tmp/$$
 status=1	# failure is the default!
 
 _cleanup()
@@ -105,36 +106,40 @@ run_qemu <<EOF
 { "execute": "qmp_capabilities" }
 { "execute": "blockdev-add",
     "arguments": {
-        "node-name": "drive2",
-        "driver": "$IMGFMT",
-        "file": {
-            "driver": "file",
-            "filename": "$TEST_DIR/2.raw"
+        "options": {
+            "node-name": "drive2",
+            "driver": "$IMGFMT",
+            "file": {
+                "driver": "file",
+                "filename": "$TEST_DIR/2.raw"
+            }
         }
     }
 }
 { "execute": "blockdev-add",
     "arguments": {
-        "driver": "quorum",
-        "node-name": "drive0-quorum",
-        "vote-threshold": 2,
-        "children": [
-            {
-                "driver": "$IMGFMT",
-                "file": {
-                    "driver": "file",
-                    "filename": "$TEST_DIR/1.raw"
+        "options": {
+            "driver": "quorum",
+            "id": "drive0-quorum",
+            "vote-threshold": 2,
+            "children": [
+                {
+                    "driver": "$IMGFMT",
+                    "file": {
+                        "driver": "file",
+                        "filename": "$TEST_DIR/1.raw"
+                    }
+                },
+                "drive2",
+                {
+                    "driver": "$IMGFMT",
+                    "file": {
+                        "driver": "file",
+                        "filename": "$TEST_DIR/3.raw"
+                    }
                 }
-            },
-            "drive2",
-            {
-                "driver": "$IMGFMT",
-                "file": {
-                    "driver": "file",
-                    "filename": "$TEST_DIR/3.raw"
-                }
-            }
-        ]
+            ]
+        }
     }
 }
 { "execute": "human-monitor-command",

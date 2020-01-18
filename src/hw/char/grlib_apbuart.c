@@ -22,9 +22,8 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 
 #include "trace.h"
 
@@ -78,7 +77,7 @@ typedef struct UART {
     MemoryRegion iomem;
     qemu_irq irq;
 
-    CharBackend chr;
+    CharDriverState *chr;
 
     /* registers */
     uint32_t status;
@@ -201,12 +200,9 @@ static void grlib_apbuart_write(void *opaque, hwaddr addr,
     case DATA_OFFSET:
     case DATA_OFFSET + 3:       /* When only one byte write */
         /* Transmit when character device available and transmitter enabled */
-        if (qemu_chr_fe_backend_connected(&uart->chr) &&
-            (uart->control & UART_TRANSMIT_ENABLE)) {
+        if ((uart->chr) && (uart->control & UART_TRANSMIT_ENABLE)) {
             c = value & 0xFF;
-            /* XXX this blocks entire thread. Rewrite to use
-             * qemu_chr_fe_write and background I/O callbacks */
-            qemu_chr_fe_write_all(&uart->chr, &c, 1);
+            qemu_chr_fe_write(uart->chr, &c, 1);
             /* Generate interrupt */
             if (uart->control & UART_TRANSMIT_INTERRUPT) {
                 qemu_irq_pulse(uart->irq);
@@ -243,11 +239,11 @@ static int grlib_apbuart_init(SysBusDevice *dev)
 {
     UART *uart = GRLIB_APB_UART(dev);
 
-    qemu_chr_fe_set_handlers(&uart->chr,
-                             grlib_apbuart_can_receive,
-                             grlib_apbuart_receive,
-                             grlib_apbuart_event,
-                             NULL, uart, NULL, true);
+    qemu_chr_add_handlers(uart->chr,
+                          grlib_apbuart_can_receive,
+                          grlib_apbuart_receive,
+                          grlib_apbuart_event,
+                          uart);
 
     sysbus_init_irq(dev, &uart->irq);
 

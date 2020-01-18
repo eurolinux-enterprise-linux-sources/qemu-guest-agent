@@ -633,6 +633,22 @@ static int nii_initialise ( struct nii_nic *nii ) {
 }
 
 /**
+ * Initialise UNDI and detect cable
+ *
+ * @v nii		NII NIC
+ * @ret rc		Return status code
+ */
+static int nii_initialise_and_detect ( struct nii_nic *nii ) {
+	unsigned int flags;
+
+	/* Initialise UNDI and detect cable.  This is required to work
+	 * around bugs in some Emulex NII drivers.
+	 */
+	flags = PXE_OPFLAGS_INITIALIZE_DETECT_CABLE;
+	return nii_initialise_flags ( nii, flags );
+}
+
+/**
  * Shut down UNDI
  *
  * @v nii		NII NIC
@@ -952,32 +968,20 @@ static void nii_poll ( struct net_device *netdev ) {
  */
 static int nii_open ( struct net_device *netdev ) {
 	struct nii_nic *nii = netdev->priv;
-	unsigned int flags;
 	int rc;
 
 	/* Initialise NIC
 	 *
-	 * We don't care about link state here, and would prefer to
-	 * have the NIC initialise even if no cable is present, to
-	 * match the behaviour of all other iPXE drivers.
-	 *
 	 * Some Emulex NII drivers have a bug which prevents packets
 	 * from being sent or received unless we specifically ask it
-	 * to detect cable presence during initialisation.
-	 *
-	 * Unfortunately, some other NII drivers (e.g. Mellanox) may
-	 * time out and report failure if asked to detect cable
-	 * presence during initialisation on links that are physically
-	 * slow to reach link-up.
-	 *
-	 * Attempt to work around both of these problems by requesting
-	 * cable detection at this point if any only if the driver is
-	 * not capable of reporting link status changes at runtime via
-	 * PXE_OPCODE_GET_STATUS.
+	 * to detect cable presence during initialisation.  Work
+	 * around these buggy drivers by requesting cable detection at
+	 * this point, even though we don't care about link state here
+	 * (and would prefer to have the NIC initialise even if no
+	 * cable is present, to match the behaviour of all other iPXE
+	 * drivers).
 	 */
-	flags = ( nii->media ? PXE_OPFLAGS_INITIALIZE_DO_NOT_DETECT_CABLE
-		  : PXE_OPFLAGS_INITIALIZE_DETECT_CABLE );
-	if ( ( rc = nii_initialise_flags ( nii, flags ) ) != 0 )
+	if ( ( rc = nii_initialise_and_detect ( nii ) ) != 0 )
 		goto err_initialise;
 
 	/* Attempt to set station address */
@@ -1121,8 +1125,8 @@ int nii_start ( struct efi_device *efidev ) {
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
-	DBGC ( nii, "NII %s registered as %s for %s\n", nii->dev.name,
-	       netdev->name, efi_handle_name ( device ) );
+	DBGC ( nii, "NII %s registered as %s for %p %s\n", nii->dev.name,
+	       netdev->name, device, efi_handle_name ( device ) );
 
 	/* Set initial link state (if media detection is not supported) */
 	if ( ! nii->media )

@@ -10,8 +10,7 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 
-#include "qemu/osdep.h"
-#include "hw/ssi/ssi.h"
+#include "hw/ssi.h"
 #include "ui/console.h"
 
 typedef struct {
@@ -133,7 +132,7 @@ static const VMStateDescription vmstate_ads7846 = {
     }
 };
 
-static void ads7846_realize(SSISlave *d, Error **errp)
+static int ads7846_init(SSISlave *d)
 {
     DeviceState *dev = DEVICE(d);
     ADS7846State *s = FROM_SSI_SLAVE(ADS7846State, d);
@@ -152,13 +151,14 @@ static void ads7846_realize(SSISlave *d, Error **errp)
     ads7846_int_update(s);
 
     vmstate_register(NULL, -1, &vmstate_ads7846, s);
+    return 0;
 }
 
 static void ads7846_class_init(ObjectClass *klass, void *data)
 {
     SSISlaveClass *k = SSI_SLAVE_CLASS(klass);
 
-    k->realize = ads7846_realize;
+    k->init = ads7846_init;
     k->transfer = ads7846_transfer;
 }
 

@@ -2,16 +2,15 @@
  * QEMU GE IP-Octal 232 IndustryPack emulation
  *
  * Copyright (C) 2012 Igalia, S.L.
- * Author: Alberto Garcia <berto@igalia.com>
+ * Author: Alberto Garcia <agarcia@igalia.com>
  *
  * This code is licensed under the GNU GPL v2 or (at your option) any
  * later version.
  */
 
-#include "qemu/osdep.h"
 #include "hw/ipack/ipack.h"
 #include "qemu/bitops.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 
 /* #define DEBUG_IPOCTAL */
 
@@ -93,7 +92,7 @@ typedef struct SCC2698Block SCC2698Block;
 
 struct SCC2698Channel {
     IPOctalState *ipoctal;
-    CharBackend dev;
+    CharDriverState *dev;
     bool rx_enabled;
     uint8_t mr[2];
     uint8_t mr_idx;
@@ -288,7 +287,9 @@ static uint16_t io_read(IPackDevice *ip, uint8_t addr)
             if (ch->rx_pending == 0) {
                 ch->sr &= ~SR_RXRDY;
                 blk->isr &= ~ISR_RXRDY(channel);
-                qemu_chr_fe_accept_input(&ch->dev);
+                if (ch->dev) {
+                    qemu_chr_accept_input(ch->dev);
+                }
             } else {
                 ch->rhr_idx = (ch->rhr_idx + 1) % RX_FIFO_SIZE;
             }
@@ -355,11 +356,11 @@ static void io_write(IPackDevice *ip, uint8_t addr, uint16_t val)
     case REG_THRa:
     case REG_THRb:
         if (ch->sr & SR_TXRDY) {
-            uint8_t thr = reg;
             DPRINTF("Write THR%c (0x%x)\n", channel + 'a', reg);
-            /* XXX this blocks entire thread. Rewrite to use
-             * qemu_chr_fe_write and background I/O callbacks */
-            qemu_chr_fe_write_all(&ch->dev, &thr, 1);
+            if (ch->dev) {
+                uint8_t thr = reg;
+                qemu_chr_fe_write(ch->dev, &thr, 1);
+            }
         } else {
             DPRINTF("Write THR%c (0x%x), Tx disabled\n", channel + 'a', reg);
         }
@@ -542,10 +543,9 @@ static void ipoctal_realize(DeviceState *dev, Error **errp)
         ch->ipoctal = s;
 
         /* Redirect IP-Octal channels to host character devices */
-        if (qemu_chr_fe_backend_connected(&ch->dev)) {
-            qemu_chr_fe_set_handlers(&ch->dev, hostdev_can_receive,
-                                     hostdev_receive, hostdev_event,
-                                     NULL, ch, NULL, true);
+        if (ch->dev) {
+            qemu_chr_add_handlers(ch->dev, hostdev_can_receive,
+                                  hostdev_receive, hostdev_event, ch);
             DPRINTF("Redirecting channel %u to %s\n", i, ch->dev->label);
         } else {
             DPRINTF("Could not redirect channel %u, no chardev set\n", i);

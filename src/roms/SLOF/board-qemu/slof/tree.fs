@@ -26,8 +26,6 @@
 \ 2 encode-int s" #size-cells" property
 \ s" chrp" device-type
 
-#include "archsupport.fs"
-
 480 cp
 
 \ See 3.6.5, and the PowerPC OF binding document.
@@ -45,9 +43,7 @@ device-end
 
 \ Fixup timebase frequency from device-tree
 : fixup-tbfreq
-    " /cpus" find-device
-    get-node child dup 0= ABORT" CPU not found"
-    set-node
+    " /cpus/@0" find-device
     " timebase-frequency" get-node get-package-property IF
         2drop
     ELSE
@@ -97,6 +93,8 @@ include fbuffer.fs
 
 \ Now do it
 populate-vios
+
+580 cp
 
 5a0 cp
 
@@ -153,11 +151,24 @@ populate-pci-busses
 \ Add rtas cleanup last
 ' rtas-quiesce add-quiesce-xt
 
+640 cp
+
+690 cp
+
+6a0 cp
+
+6a8 cp
+
+6b0 cp
+
+6b8 cp
+
 6c0 cp
 
-set-chosen-cpu
-
+s" /cpus/@0" open-dev encode-int s" cpu" set-chosen
 s" /memory@0" open-dev encode-int s" memory" set-chosen
+
+6e0 cp
 
 700 cp
 
@@ -165,6 +176,11 @@ s" /memory@0" open-dev encode-int s" memory" set-chosen
 s" /openprom" find-device
    s" SLOF," slof-build-id here swap rmove here slof-build-id nip $cat encode-string s" model" property
    0 0 s" relative-addressing" property
+device-end
+
+s" /aliases" find-device
+   : open  true ;
+   : close ;
 device-end
 
 s" /mmu" open-dev encode-int s" mmu" set-chosen

@@ -1,5 +1,6 @@
+
 /*
- * 9p backend
+ * Virtio 9p backend
  *
  * Copyright IBM, Corp. 2011
  *
@@ -11,14 +12,12 @@
  *
  */
 
-#include "qemu/osdep.h"
 #include "fsdev/qemu-fsdev.h"
 #include "qemu/thread.h"
 #include "qemu/coroutine.h"
-#include "coth.h"
+#include "virtio-9p-coth.h"
 
-int coroutine_fn v9fs_co_llistxattr(V9fsPDU *pdu, V9fsPath *path, void *value,
-                                    size_t size)
+int v9fs_co_llistxattr(V9fsPDU *pdu, V9fsPath *path, void *value, size_t size)
 {
     int err;
     V9fsState *s = pdu->s;
@@ -38,9 +37,9 @@ int coroutine_fn v9fs_co_llistxattr(V9fsPDU *pdu, V9fsPath *path, void *value,
     return err;
 }
 
-int coroutine_fn v9fs_co_lgetxattr(V9fsPDU *pdu, V9fsPath *path,
-                                   V9fsString *xattr_name, void *value,
-                                   size_t size)
+int v9fs_co_lgetxattr(V9fsPDU *pdu, V9fsPath *path,
+                      V9fsString *xattr_name,
+                      void *value, size_t size)
 {
     int err;
     V9fsState *s = pdu->s;
@@ -62,9 +61,9 @@ int coroutine_fn v9fs_co_lgetxattr(V9fsPDU *pdu, V9fsPath *path,
     return err;
 }
 
-int coroutine_fn v9fs_co_lsetxattr(V9fsPDU *pdu, V9fsPath *path,
-                                   V9fsString *xattr_name, void *value,
-                                   size_t size, int flags)
+int v9fs_co_lsetxattr(V9fsPDU *pdu, V9fsPath *path,
+                      V9fsString *xattr_name, void *value,
+                      size_t size, int flags)
 {
     int err;
     V9fsState *s = pdu->s;
@@ -86,8 +85,8 @@ int coroutine_fn v9fs_co_lsetxattr(V9fsPDU *pdu, V9fsPath *path,
     return err;
 }
 
-int coroutine_fn v9fs_co_lremovexattr(V9fsPDU *pdu, V9fsPath *path,
-                                      V9fsString *xattr_name)
+int v9fs_co_lremovexattr(V9fsPDU *pdu, V9fsPath *path,
+                         V9fsString *xattr_name)
 {
     int err;
     V9fsState *s = pdu->s;

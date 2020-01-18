@@ -18,39 +18,21 @@
  *  armv7m_nvic device.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "gic_internal.h"
-#include "qapi/error.h"
 #include "qom/cpu.h"
-#include "qemu/log.h"
-#include "trace.h"
-#include "sysemu/kvm.h"
 
-/* #define DEBUG_GIC */
+//#define DEBUG_GIC
 
 #ifdef DEBUG_GIC
-#define DEBUG_GIC_GATE 1
+#define DPRINTF(fmt, ...) \
+do { fprintf(stderr, "arm_gic: " fmt , ## __VA_ARGS__); } while (0)
 #else
-#define DEBUG_GIC_GATE 0
+#define DPRINTF(fmt, ...) do {} while(0)
 #endif
 
-#define DPRINTF(fmt, ...) do {                                          \
-        if (DEBUG_GIC_GATE) {                                           \
-            fprintf(stderr, "%s: " fmt, __func__, ## __VA_ARGS__);      \
-        }                                                               \
-    } while (0)
-
-static const uint8_t gic_id_11mpcore[] = {
-    0x00, 0x00, 0x00, 0x00, 0x90, 0x13, 0x04, 0x00, 0x0d, 0xf0, 0x05, 0xb1
-};
-
-static const uint8_t gic_id_gicv1[] = {
-    0x04, 0x00, 0x00, 0x00, 0x90, 0xb3, 0x1b, 0x00, 0x0d, 0xf0, 0x05, 0xb1
-};
-
-static const uint8_t gic_id_gicv2[] = {
-    0x04, 0x00, 0x00, 0x00, 0x90, 0xb4, 0x2b, 0x00, 0x0d, 0xf0, 0x05, 0xb1
+static const uint8_t gic_id[] = {
+    0x90, 0x13, 0x04, 0x00, 0x0d, 0xf0, 0x05, 0xb1
 };
 
 static inline int gic_get_current_cpu(GICState *s)
@@ -93,18 +75,12 @@ void gic_update(GICState *s)
         best_irq = 1023;
         for (irq = 0; irq < s->num_irq; irq++) {
             if (GIC_TEST_ENABLED(irq, cm) && gic_test_pending(s, irq, cm) &&
-                (!GIC_TEST_ACTIVE(irq, cm)) &&
                 (irq < GIC_INTERNAL || GIC_TARGET(irq) & cm)) {
                 if (GIC_GET_PRIORITY(irq, cpu) < best_prio) {
                     best_prio = GIC_GET_PRIORITY(irq, cpu);
                     best_irq = irq;
                 }
             }
-        }
-
-        if (best_irq != 1023) {
-            trace_gic_update_bestirq(cpu, best_irq, best_prio,
-                s->priority_mask[cpu], s->running_priority[cpu]);
         }
 
         irq_level = fiq_level = 0;
@@ -120,12 +96,10 @@ void gic_update(GICState *s)
                         DPRINTF("Raised pending FIQ %d (cpu %d)\n",
                                 best_irq, cpu);
                         fiq_level = 1;
-                        trace_gic_update_set_irq(cpu, "fiq", fiq_level);
                     } else {
                         DPRINTF("Raised pending IRQ %d (cpu %d)\n",
                                 best_irq, cpu);
                         irq_level = 1;
-                        trace_gic_update_set_irq(cpu, "irq", irq_level);
                     }
                 }
             }
@@ -208,12 +182,11 @@ static void gic_set_irq(void *opaque, int irq, int level)
         return;
     }
 
-    if (s->revision == REV_11MPCORE) {
+    if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
         gic_set_irq_11mpcore(s, irq, level, cm, target);
     } else {
         gic_set_irq_generic(s, irq, level, cm, target);
     }
-    trace_gic_set_irq(irq, level, cm, target);
 
     gic_update(s);
 }
@@ -256,8 +229,7 @@ static int gic_get_group_priority(GICState *s, int cpu, int irq)
     if (gic_has_groups(s) &&
         !(s->cpu_ctlr[cpu] & GICC_CTLR_CBPR) &&
         GIC_TEST_GROUP(irq, (1 << cpu))) {
-        bpr = s->abpr[cpu] - 1;
-        assert(bpr >= 0);
+        bpr = s->abpr[cpu];
     } else {
         bpr = s->bpr[cpu];
     }
@@ -350,7 +322,6 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, MemTxAttrs attrs)
      * is in the wrong group.
      */
     irq = gic_get_current_pending_irq(s, cpu, attrs);
-    trace_gic_acknowledge_irq(cpu, irq);
 
     if (irq >= GIC_MAXIRQ) {
         DPRINTF("ACK, no pending interrupt or it is hidden: %d\n", irq);
@@ -362,7 +333,7 @@ uint32_t gic_acknowledge_irq(GICState *s, int cpu, MemTxAttrs attrs)
         return 1023;
     }
 
-    if (s->revision == REV_11MPCORE) {
+    if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
         /* Clear pending flags for both level and edge triggered interrupts.
          * Level triggered IRQs will be reasserted once they become inactive.
          */
@@ -505,11 +476,6 @@ static void gic_set_cpu_control(GICState *s, int cpu, uint32_t value,
 
 static uint8_t gic_get_running_priority(GICState *s, int cpu, MemTxAttrs attrs)
 {
-    if ((s->revision != REV_11MPCORE) && (s->running_priority[cpu] > 0xff)) {
-        /* Idle priority */
-        return 0xff;
-    }
-
     if (s->security_extn && !attrs.secure) {
         if (s->running_priority[cpu] & 0x80) {
             /* Running priority in upper half of range: return the Non-secure
@@ -523,41 +489,6 @@ static uint8_t gic_get_running_priority(GICState *s, int cpu, MemTxAttrs attrs)
     } else {
         return s->running_priority[cpu];
     }
-}
-
-/* Return true if we should split priority drop and interrupt deactivation,
- * ie whether the relevant EOIMode bit is set.
- */
-static bool gic_eoi_split(GICState *s, int cpu, MemTxAttrs attrs)
-{
-    if (s->revision != 2) {
-        /* Before GICv2 prio-drop and deactivate are not separable */
-        return false;
-    }
-    if (s->security_extn && !attrs.secure) {
-        return s->cpu_ctlr[cpu] & GICC_CTLR_EOIMODE_NS;
-    }
-    return s->cpu_ctlr[cpu] & GICC_CTLR_EOIMODE;
-}
-
-static void gic_deactivate_irq(GICState *s, int cpu, int irq, MemTxAttrs attrs)
-{
-    int cm = 1 << cpu;
-    int group = gic_has_groups(s) && GIC_TEST_GROUP(irq, cm);
-
-    if (!gic_eoi_split(s, cpu, attrs)) {
-        /* This is UNPREDICTABLE; we choose to ignore it */
-        qemu_log_mask(LOG_GUEST_ERROR,
-                      "gic_deactivate_irq: GICC_DIR write when EOIMode clear");
-        return;
-    }
-
-    if (s->security_extn && !attrs.secure && !group) {
-        DPRINTF("Non-secure DI for Group0 interrupt %d ignored\n", irq);
-        return;
-    }
-
-    GIC_CLEAR_ACTIVE(irq, cm);
 }
 
 void gic_complete_irq(GICState *s, int cpu, int irq, MemTxAttrs attrs)
@@ -581,7 +512,7 @@ void gic_complete_irq(GICState *s, int cpu, int irq, MemTxAttrs attrs)
         return; /* No active IRQ.  */
     }
 
-    if (s->revision == REV_11MPCORE) {
+    if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
         /* Mark level triggered interrupts as pending if they are still
            raised.  */
         if (!GIC_TEST_EDGE_TRIGGER(irq) && GIC_TEST_ENABLED(irq, cm)
@@ -604,11 +535,7 @@ void gic_complete_irq(GICState *s, int cpu, int irq, MemTxAttrs attrs)
      */
 
     gic_drop_prio(s, cpu, group);
-
-    /* In GICv2 the guest can choose to split priority-drop and deactivate */
-    if (!gic_eoi_split(s, cpu, attrs)) {
-        GIC_CLEAR_ACTIVE(irq, cm);
-    }
+    GIC_CLEAR_ACTIVE(irq, cm);
     gic_update(s);
 }
 
@@ -674,11 +601,6 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
             goto bad_reg;
         res = 0;
         for (i = 0; i < 8; i++) {
-            if (s->security_extn && !attrs.secure &&
-                !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                continue; /* Ignore Non-secure access of Group0 IRQ */
-            }
-
             if (GIC_TEST_ENABLED(irq + i, cm)) {
                 res |= (1 << i);
             }
@@ -695,11 +617,6 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
         res = 0;
         mask = (irq < GIC_INTERNAL) ?  cm : ALL_CPU_MASK;
         for (i = 0; i < 8; i++) {
-            if (s->security_extn && !attrs.secure &&
-                !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                continue; /* Ignore Non-secure access of Group0 IRQ */
-            }
-
             if (gic_test_pending(s, irq + i, mask)) {
                 res |= (1 << i);
             }
@@ -712,11 +629,6 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
         res = 0;
         mask = (irq < GIC_INTERNAL) ?  cm : ALL_CPU_MASK;
         for (i = 0; i < 8; i++) {
-            if (s->security_extn && !attrs.secure &&
-                !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                continue; /* Ignore Non-secure access of Group0 IRQ */
-            }
-
             if (GIC_TEST_ACTIVE(irq + i, mask)) {
                 res |= (1 << i);
             }
@@ -750,11 +662,6 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
             goto bad_reg;
         res = 0;
         for (i = 0; i < 4; i++) {
-            if (s->security_extn && !attrs.secure &&
-                !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                continue; /* Ignore Non-secure access of Group0 IRQ */
-            }
-
             if (GIC_TEST_MODEL(irq + i))
                 res |= (1 << (i * 2));
             if (GIC_TEST_EDGE_TRIGGER(irq + i))
@@ -763,7 +670,7 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
     } else if (offset < 0xf10) {
         goto bad_reg;
     } else if (offset < 0xf30) {
-        if (s->revision == REV_11MPCORE) {
+        if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
             goto bad_reg;
         }
 
@@ -775,34 +682,15 @@ static uint32_t gic_dist_readb(void *opaque, hwaddr offset, MemTxAttrs attrs)
             /* GICD_SPENDSGIRn */
         }
 
-        if (s->security_extn && !attrs.secure &&
-            !GIC_TEST_GROUP(irq, 1 << cpu)) {
-            res = 0; /* Ignore Non-secure access of Group0 IRQ */
-        } else {
-            res = s->sgi_pending[irq][cpu];
-        }
-    } else if (offset < 0xfd0) {
+        res = s->sgi_pending[irq][cpu];
+    } else if (offset < 0xfe0) {
         goto bad_reg;
-    } else if (offset < 0x1000) {
+    } else /* offset >= 0xfe0 */ {
         if (offset & 3) {
             res = 0;
         } else {
-            switch (s->revision) {
-            case REV_11MPCORE:
-                res = gic_id_11mpcore[(offset - 0xfd0) >> 2];
-                break;
-            case 1:
-                res = gic_id_gicv1[(offset - 0xfd0) >> 2];
-                break;
-            case 2:
-                res = gic_id_gicv2[(offset - 0xfd0) >> 2];
-                break;
-            default:
-                res = 0;
-            }
+            res = gic_id[(offset - 0xfe0) >> 2];
         }
-    } else {
-        g_assert_not_reached();
     }
     return res;
 bad_reg:
@@ -897,14 +785,8 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
                     (irq < GIC_INTERNAL) ? (1 << cpu) : GIC_TARGET(irq + i);
                 int cm = (irq < GIC_INTERNAL) ? (1 << cpu) : ALL_CPU_MASK;
 
-                if (s->security_extn && !attrs.secure &&
-                    !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                    continue; /* Ignore Non-secure access of Group0 IRQ */
-                }
-
                 if (!GIC_TEST_ENABLED(irq + i, cm)) {
                     DPRINTF("Enabled IRQ %d\n", irq + i);
-                    trace_gic_enable_irq(irq + i);
                 }
                 GIC_SET_ENABLED(irq + i, cm);
                 /* If a raised level triggered IRQ enabled then mark
@@ -929,14 +811,8 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
             if (value & (1 << i)) {
                 int cm = (irq < GIC_INTERNAL) ? (1 << cpu) : ALL_CPU_MASK;
 
-                if (s->security_extn && !attrs.secure &&
-                    !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                    continue; /* Ignore Non-secure access of Group0 IRQ */
-                }
-
                 if (GIC_TEST_ENABLED(irq + i, cm)) {
                     DPRINTF("Disabled IRQ %d\n", irq + i);
-                    trace_gic_disable_irq(irq + i);
                 }
                 GIC_CLEAR_ENABLED(irq + i, cm);
             }
@@ -952,11 +828,6 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
 
         for (i = 0; i < 8; i++) {
             if (value & (1 << i)) {
-                if (s->security_extn && !attrs.secure &&
-                    !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                    continue; /* Ignore Non-secure access of Group0 IRQ */
-                }
-
                 GIC_SET_PENDING(irq + i, GIC_TARGET(irq + i));
             }
         }
@@ -970,11 +841,6 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         }
 
         for (i = 0; i < 8; i++) {
-            if (s->security_extn && !attrs.secure &&
-                !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                continue; /* Ignore Non-secure access of Group0 IRQ */
-            }
-
             /* ??? This currently clears the pending bit for all CPUs, even
                for per-CPU interrupts.  It's unclear whether this is the
                corect behavior.  */
@@ -1015,12 +881,7 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         if (irq < GIC_NR_SGIS)
             value |= 0xaa;
         for (i = 0; i < 4; i++) {
-            if (s->security_extn && !attrs.secure &&
-                !GIC_TEST_GROUP(irq + i, 1 << cpu)) {
-                continue; /* Ignore Non-secure access of Group0 IRQ */
-            }
-
-            if (s->revision == REV_11MPCORE) {
+            if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
                 if (value & (1 << (i * 2))) {
                     GIC_SET_MODEL(irq + i);
                 } else {
@@ -1038,30 +899,24 @@ static void gic_dist_writeb(void *opaque, hwaddr offset,
         goto bad_reg;
     } else if (offset < 0xf20) {
         /* GICD_CPENDSGIRn */
-        if (s->revision == REV_11MPCORE) {
+        if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
             goto bad_reg;
         }
         irq = (offset - 0xf10);
 
-        if (!s->security_extn || attrs.secure ||
-            GIC_TEST_GROUP(irq, 1 << cpu)) {
-            s->sgi_pending[irq][cpu] &= ~value;
-            if (s->sgi_pending[irq][cpu] == 0) {
-                GIC_CLEAR_PENDING(irq, 1 << cpu);
-            }
+        s->sgi_pending[irq][cpu] &= ~value;
+        if (s->sgi_pending[irq][cpu] == 0) {
+            GIC_CLEAR_PENDING(irq, 1 << cpu);
         }
     } else if (offset < 0xf30) {
         /* GICD_SPENDSGIRn */
-        if (s->revision == REV_11MPCORE) {
+        if (s->revision == REV_11MPCORE || s->revision == REV_NVIC) {
             goto bad_reg;
         }
         irq = (offset - 0xf20);
 
-        if (!s->security_extn || attrs.secure ||
-            GIC_TEST_GROUP(irq, 1 << cpu)) {
-            GIC_SET_PENDING(irq, 1 << cpu);
-            s->sgi_pending[irq][cpu] |= value;
-        }
+        GIC_SET_PENDING(irq, 1 << cpu);
+        s->sgi_pending[irq][cpu] |= value;
     } else {
         goto bad_reg;
     }
@@ -1212,13 +1067,8 @@ static MemTxResult gic_cpu_read(GICState *s, int cpu, int offset,
         break;
     case 0x08: /* Binary Point */
         if (s->security_extn && !attrs.secure) {
-            if (s->cpu_ctlr[cpu] & GICC_CTLR_CBPR) {
-                /* NS view of BPR when CBPR is 1 */
-                *data = MIN(s->bpr[cpu] + 1, 7);
-            } else {
-                /* BPR is banked. Non-secure copy stored in ABPR. */
-                *data = s->abpr[cpu];
-            }
+            /* BPR is banked. Non-secure copy stored in ABPR. */
+            *data = s->abpr[cpu];
         } else {
             *data = s->bpr[cpu];
         }
@@ -1273,8 +1123,7 @@ static MemTxResult gic_cpu_read(GICState *s, int cpu, int offset,
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "gic_cpu_read: Bad offset %x\n", (int)offset);
-        *data = 0;
-        break;
+        return MEMTX_ERROR;
     }
     return MEMTX_OK;
 }
@@ -1291,12 +1140,7 @@ static MemTxResult gic_cpu_write(GICState *s, int cpu, int offset,
         break;
     case 0x08: /* Binary Point */
         if (s->security_extn && !attrs.secure) {
-            if (s->cpu_ctlr[cpu] & GICC_CTLR_CBPR) {
-                /* WI when CBPR is 1 */
-                return MEMTX_OK;
-            } else {
-                s->abpr[cpu] = MAX(value & 0x7, GIC_MIN_ABPR);
-            }
+            s->abpr[cpu] = MAX(value & 0x7, GIC_MIN_ABPR);
         } else {
             s->bpr[cpu] = MAX(value & 0x7, GIC_MIN_BPR);
         }
@@ -1340,14 +1184,10 @@ static MemTxResult gic_cpu_write(GICState *s, int cpu, int offset,
         s->nsapr[regno][cpu] = value;
         break;
     }
-    case 0x1000:
-        /* GICC_DIR */
-        gic_deactivate_irq(s, cpu, value & 0x3ff, attrs);
-        break;
     default:
         qemu_log_mask(LOG_GUEST_ERROR,
                       "gic_cpu_write: Bad offset %x\n", (int)offset);
-        return MEMTX_OK;
+        return MEMTX_ERROR;
     }
     gic_update(s);
     return MEMTX_OK;
@@ -1431,12 +1271,6 @@ static void arm_gic_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    if (kvm_enabled() && !kvm_arm_supports_user_irq()) {
-        error_setg(errp, "KVM with user space irqchip only works when the "
-                         "host kernel supports KVM_CAP_ARM_USER_IRQ");
-        return;
-    }
-
     /* This creates distributor and main CPU interface (s->cpuiomem[0]) */
     gic_init_irqs_and_mmio(s, gic_set_irq, gic_ops);
 
@@ -1461,7 +1295,8 @@ static void arm_gic_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     ARMGICClass *agc = ARM_GIC_CLASS(klass);
 
-    device_class_set_parent_realize(dc, arm_gic_realize, &agc->parent_realize);
+    agc->parent_realize = dc->realize;
+    dc->realize = arm_gic_realize;
 }
 
 static const TypeInfo arm_gic_info = {

@@ -24,35 +24,35 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "vnc.h"
-#include "qapi/error.h"
 #include "qemu/main-loop.h"
-#include "trace.h"
 
 static void start_auth_vencrypt_subauth(VncState *vs)
 {
     switch (vs->subauth) {
     case VNC_AUTH_VENCRYPT_TLSNONE:
     case VNC_AUTH_VENCRYPT_X509NONE:
+       VNC_DEBUG("Accept TLS auth none\n");
        vnc_write_u32(vs, 0); /* Accept auth completion */
        start_client_init(vs);
        break;
 
     case VNC_AUTH_VENCRYPT_TLSVNC:
     case VNC_AUTH_VENCRYPT_X509VNC:
+       VNC_DEBUG("Start TLS auth VNC\n");
        start_auth_vnc(vs);
        break;
 
 #ifdef CONFIG_VNC_SASL
     case VNC_AUTH_VENCRYPT_TLSSASL:
     case VNC_AUTH_VENCRYPT_X509SASL:
+      VNC_DEBUG("Start TLS auth SASL\n");
       start_auth_sasl(vs);
       break;
 #endif /* CONFIG_VNC_SASL */
 
     default: /* Should not be possible, but just in case */
-       trace_vnc_auth_fail(vs, vs->auth, "Unhandled VeNCrypt subauth", "");
+       VNC_DEBUG("Reject subauth %d server bug\n", vs->auth);
        vnc_write_u8(vs, 1);
        if (vs->minor >= 8) {
            static const char err[] = "Unsupported authentication type";
@@ -63,25 +63,54 @@ static void start_auth_vencrypt_subauth(VncState *vs)
     }
 }
 
-static void vnc_tls_handshake_done(QIOTask *task,
-                                   gpointer user_data)
+static void vnc_tls_handshake_io(void *opaque);
+
+static int vnc_start_vencrypt_handshake(VncState *vs)
 {
-    VncState *vs = user_data;
     Error *err = NULL;
 
-    if (qio_task_propagate_error(task, &err)) {
-        trace_vnc_auth_fail(vs, vs->auth, "TLS handshake failed",
-                            error_get_pretty(err));
-        vnc_client_error(vs);
-        error_free(err);
-    } else {
-        if (vs->ioc_tag) {
-            g_source_remove(vs->ioc_tag);
-        }
-        vs->ioc_tag = qio_channel_add_watch(
-            vs->ioc, G_IO_IN | G_IO_OUT, vnc_client_io, vs, NULL);
-        start_auth_vencrypt_subauth(vs);
+    if (qcrypto_tls_session_handshake(vs->tls, &err) < 0) {
+        goto error;
     }
+
+    switch (qcrypto_tls_session_get_handshake_status(vs->tls)) {
+    case QCRYPTO_TLS_HANDSHAKE_COMPLETE:
+        VNC_DEBUG("Handshake done, checking credentials\n");
+        if (qcrypto_tls_session_check_credentials(vs->tls, &err) < 0) {
+            goto error;
+        }
+        VNC_DEBUG("Client verification passed, starting TLS I/O\n");
+        qemu_set_fd_handler(vs->csock, vnc_client_read, vnc_client_write, vs);
+
+        start_auth_vencrypt_subauth(vs);
+        break;
+
+    case QCRYPTO_TLS_HANDSHAKE_RECVING:
+        VNC_DEBUG("Handshake interrupted (blocking read)\n");
+        qemu_set_fd_handler(vs->csock, vnc_tls_handshake_io, NULL, vs);
+        break;
+
+    case QCRYPTO_TLS_HANDSHAKE_SENDING:
+        VNC_DEBUG("Handshake interrupted (blocking write)\n");
+        qemu_set_fd_handler(vs->csock, NULL, vnc_tls_handshake_io, vs);
+        break;
+    }
+
+    return 0;
+
+ error:
+    VNC_DEBUG("Handshake failed %s\n", error_get_pretty(err));
+    error_free(err);
+    vnc_client_error(vs);
+    return -1;
+}
+
+static void vnc_tls_handshake_io(void *opaque)
+{
+    VncState *vs = (VncState *)opaque;
+
+    VNC_DEBUG("Handshake IO continue\n");
+    vnc_start_vencrypt_handshake(vs);
 }
 
 
@@ -89,61 +118,54 @@ static int protocol_client_vencrypt_auth(VncState *vs, uint8_t *data, size_t len
 {
     int auth = read_u32(data, 0);
 
-    trace_vnc_auth_vencrypt_subauth(vs, auth);
     if (auth != vs->subauth) {
-        trace_vnc_auth_fail(vs, vs->auth, "Unsupported sub-auth version", "");
+        VNC_DEBUG("Rejecting auth %d\n", auth);
         vnc_write_u8(vs, 0); /* Reject auth */
         vnc_flush(vs);
         vnc_client_error(vs);
     } else {
         Error *err = NULL;
-        QIOChannelTLS *tls;
+        VNC_DEBUG("Accepting auth %d, setting up TLS for handshake\n", auth);
         vnc_write_u8(vs, 1); /* Accept auth */
         vnc_flush(vs);
 
-        if (vs->ioc_tag) {
-            g_source_remove(vs->ioc_tag);
-            vs->ioc_tag = 0;
-        }
-
-        tls = qio_channel_tls_new_server(
-            vs->ioc,
-            vs->vd->tlscreds,
-            vs->vd->tlsaclname,
-            &err);
-        if (!tls) {
-            trace_vnc_auth_fail(vs, vs->auth, "TLS setup failed",
-                                error_get_pretty(err));
+        vs->tls = qcrypto_tls_session_new(vs->vd->tlscreds,
+                                          NULL,
+                                          vs->vd->tlsaclname,
+                                          QCRYPTO_TLS_CREDS_ENDPOINT_SERVER,
+                                          &err);
+        if (!vs->tls) {
+            VNC_DEBUG("Failed to setup TLS %s\n",
+                      error_get_pretty(err));
             error_free(err);
             vnc_client_error(vs);
             return 0;
         }
 
-        qio_channel_set_name(QIO_CHANNEL(tls), "vnc-server-tls");
-        object_unref(OBJECT(vs->ioc));
-        vs->ioc = QIO_CHANNEL(tls);
-        trace_vnc_client_io_wrap(vs, vs->ioc, "tls");
-        vs->tls = qio_channel_tls_get_session(tls);
+        qcrypto_tls_session_set_callbacks(vs->tls,
+                                          vnc_tls_push,
+                                          vnc_tls_pull,
+                                          vs);
 
-        qio_channel_tls_handshake(tls,
-                                  vnc_tls_handshake_done,
-                                  vs,
-                                  NULL,
-                                  NULL);
+        VNC_DEBUG("Start TLS VeNCrypt handshake process\n");
+        if (vnc_start_vencrypt_handshake(vs) < 0) {
+            VNC_DEBUG("Failed to start TLS handshake\n");
+            return 0;
+        }
     }
     return 0;
 }
 
 static int protocol_client_vencrypt_init(VncState *vs, uint8_t *data, size_t len)
 {
-    trace_vnc_auth_vencrypt_version(vs, (int)data[0], (int)data[1]);
     if (data[0] != 0 ||
         data[1] != 2) {
-        trace_vnc_auth_fail(vs, vs->auth, "Unsupported version", "");
+        VNC_DEBUG("Unsupported VeNCrypt protocol %d.%d\n", (int)data[0], (int)data[1]);
         vnc_write_u8(vs, 1); /* Reject version */
         vnc_flush(vs);
         vnc_client_error(vs);
     } else {
+        VNC_DEBUG("Sending allowed auth %d\n", vs->subauth);
         vnc_write_u8(vs, 0); /* Accept version */
         vnc_write_u8(vs, 1); /* Number of sub-auths */
         vnc_write_u32(vs, vs->subauth); /* The supported auth */

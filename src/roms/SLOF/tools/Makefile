@@ -12,27 +12,22 @@
 
 include ../make.rules
 
-TARGETS = gen_reloc_table sloffs
-HOSTCFLAGS += -I../romfs/tools
-
-all: $(TARGETS)
-
-crclib.o: ../romfs/tools/crclib.c
-		$(HOSTCC) -W $(HOSTCFLAGS) -c $^ -o $@
+all: gen_reloc_table
 
 %.o: %.c
 		$(HOSTCC) -W $(HOSTCFLAGS) -c $^
 
+elf2tst:	elf2tst.o
+		$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
+
 gen_reloc_table: gen_reloc_table.o
 		$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
 
-sloffs: sloffs.o crclib.o
-		$(HOSTCC) $(HOSTCFLAGS) -o $@ $^
-
 clean_here:
-	rm -f *.o $(TARGETS)
+	rm -f elf2tst *.o gen_reloc_table
 
-clean: clean_here
+clean:	clean_here
 
 
-distclean: clean_here
+distclean:	clean_here
+

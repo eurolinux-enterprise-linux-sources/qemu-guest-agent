@@ -9,7 +9,6 @@
  * version.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "hw/empty_slot.h"

@@ -60,7 +60,21 @@ CREATE load-list 2 cells allot load-list 2 cells erase
 : .client-exec ( arg len -- rc ) set-bootargs (client-exec) ;
 ' .client-exec to client-exec
 
-: ping  ( "{device-path:[device-args,]server-ip,[client-ip[\nn]],[gateway-ip][,timeout]}" -- )
+: netflash ( -- rc ) s" netflash 2000000 " (parse-line) $cat set-netbootpath
+   client-exec
+;
+
+: netsave  ( "addr len {filename}[,params]" -- rc )
+   (parse-line) dup 0> IF
+      s" netsave " 2swap $cat set-netbootpath client-exec
+   ELSE
+      cr
+      ." Usage: netsave addr len [bootp|dhcp,]filename[,siaddr][,ciaddr][,giaddr][,bootp-retries][,tftp-retries][,use_ci]"
+      cr 2drop
+   THEN
+;
+
+: ping  ( "{device-path:[device-args,]server-ip,[client-ip],[gateway-ip][,timeout]}" -- )
    my-self >r current-node @ >r  \ Save my-self
    (parse-line) open-dev dup  IF
       dup to my-self dup ihandle>phandle set-node
@@ -73,7 +87,7 @@ CREATE load-list 2 cells allot load-list 2 cells erase
       swap close-dev
    ELSE
       cr
-      ." Usage: ping device-path:[device-args,]server-ip,[client-ip[\nn]],[gateway-ip][,timeout]"
+      ." Usage: ping device-path:[device-args,]server-ip,[client-ip],[gateway-ip][,timeout]"
       cr drop
    THEN
    r> set-node r> to my-self  \ Restore my-self

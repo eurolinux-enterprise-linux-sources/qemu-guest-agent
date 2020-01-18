@@ -7,8 +7,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
+#include <string.h>
 #include "libqtest.h"
+#include "qemu/osdep.h"
 
 static void pci_cirrus(void)
 {
@@ -50,14 +52,11 @@ static void pci_virtio_vga(void)
 
 int main(int argc, char **argv)
 {
-    const char *arch = qtest_get_arch();
+    int ret;
 
     g_test_init(&argc, &argv, NULL);
 
-    if (strcmp(arch, "alpha") == 0 || strcmp(arch, "i386") == 0 ||
-        strcmp(arch, "mips") == 0 || strcmp(arch, "x86_64") == 0) {
-        qtest_add_func("/display/pci/cirrus", pci_cirrus);
-    }
+    qtest_add_func("/display/pci/cirrus", pci_cirrus);
     qtest_add_func("/display/pci/stdvga", pci_stdvga);
     qtest_add_func("/display/pci/secondary", pci_secondary);
     qtest_add_func("/display/pci/multihead", pci_multihead);
@@ -65,5 +64,7 @@ int main(int argc, char **argv)
 #ifdef CONFIG_VIRTIO_VGA
     qtest_add_func("/display/pci/virtio-vga", pci_virtio_vga);
 #endif
-    return g_test_run();
+    ret = g_test_run();
+
+    return ret;
 }

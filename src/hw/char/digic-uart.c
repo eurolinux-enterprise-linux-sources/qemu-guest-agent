@@ -26,11 +26,9 @@
  *
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
-#include "chardev/char-fe.h"
-#include "qemu/log.h"
+#include "sysemu/char.h"
 
 #include "hw/char/digic-uart.h"
 
@@ -76,9 +74,9 @@ static void digic_uart_write(void *opaque, hwaddr addr, uint64_t value,
 
     switch (addr) {
     case R_TX:
-        /* XXX this blocks entire thread. Rewrite to use
-         * qemu_chr_fe_write and background I/O callbacks */
-        qemu_chr_fe_write_all(&s->chr, &ch, 1);
+        if (s->chr) {
+            qemu_chr_fe_write_all(s->chr, &ch, 1);
+        }
         break;
 
     case R_ST:
@@ -145,8 +143,11 @@ static void digic_uart_realize(DeviceState *dev, Error **errp)
 {
     DigicUartState *s = DIGIC_UART(dev);
 
-    qemu_chr_fe_set_handlers(&s->chr, uart_can_rx, uart_rx,
-                             uart_event, NULL, s, NULL, true);
+    /* FIXME use a qdev chardev prop instead of qemu_char_get_next_serial() */
+    s->chr = qemu_char_get_next_serial();
+    if (s->chr) {
+        qemu_chr_add_handlers(s->chr, uart_can_rx, uart_rx, uart_event, s);
+    }
 }
 
 static void digic_uart_init(Object *obj)
@@ -169,11 +170,6 @@ static const VMStateDescription vmstate_digic_uart = {
     }
 };
 
-static Property digic_uart_properties[] = {
-    DEFINE_PROP_CHR("chardev", DigicUartState, chr),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
 static void digic_uart_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -181,7 +177,8 @@ static void digic_uart_class_init(ObjectClass *klass, void *data)
     dc->realize = digic_uart_realize;
     dc->reset = digic_uart_reset;
     dc->vmsd = &vmstate_digic_uart;
-    dc->props = digic_uart_properties;
+    /* Reason: realize() method uses qemu_char_get_next_serial() */
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo digic_uart_info = {

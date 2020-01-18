@@ -10,14 +10,11 @@
  * See the COPYING.LIB file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
 #include "block/aio.h"
-#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "qemu/sockets.h"
 #include "qemu/error-report.h"
-#include "qemu/coroutine.h"
-#include "qemu/main-loop.h"
 
 static AioContext *ctx;
 
@@ -102,7 +99,6 @@ static void event_ready_cb(EventNotifier *e)
 
 typedef struct {
     QemuMutex start_lock;
-    EventNotifier notifier;
     bool thread_acquired;
 } AcquireTestData;
 
@@ -114,11 +110,6 @@ static void *test_acquire_thread(void *opaque)
     qemu_mutex_lock(&data->start_lock);
     qemu_mutex_unlock(&data->start_lock);
 
-    /* event_notifier_set might be called either before or after
-     * the main thread's call to poll().  The test case's outcome
-     * should be the same in either case.
-     */
-    event_notifier_set(&data->notifier);
     aio_context_acquire(ctx);
     aio_context_release(ctx);
 
@@ -130,22 +121,23 @@ static void *test_acquire_thread(void *opaque)
 static void set_event_notifier(AioContext *ctx, EventNotifier *notifier,
                                EventNotifierHandler *handler)
 {
-    aio_set_event_notifier(ctx, notifier, false, handler, NULL);
+    aio_set_event_notifier(ctx, notifier, false, handler);
 }
 
-static void dummy_notifier_read(EventNotifier *n)
+static void dummy_notifier_read(EventNotifier *unused)
 {
-    event_notifier_test_and_clear(n);
+    g_assert(false); /* should never be invoked */
 }
 
 static void test_acquire(void)
 {
     QemuThread thread;
+    EventNotifier notifier;
     AcquireTestData data;
 
     /* Dummy event notifier ensures aio_poll() will block */
-    event_notifier_init(&data.notifier, false);
-    set_event_notifier(ctx, &data.notifier, dummy_notifier_read);
+    event_notifier_init(&notifier, false);
+    set_event_notifier(ctx, &notifier, dummy_notifier_read);
     g_assert(!aio_poll(ctx, false)); /* consume aio_notify() */
 
     qemu_mutex_init(&data.start_lock);
@@ -159,13 +151,12 @@ static void test_acquire(void)
     /* Block in aio_poll(), let other thread kick us and acquire context */
     aio_context_acquire(ctx);
     qemu_mutex_unlock(&data.start_lock); /* let the thread run */
-    g_assert(aio_poll(ctx, true));
-    g_assert(!data.thread_acquired);
+    g_assert(!aio_poll(ctx, true));
     aio_context_release(ctx);
 
     qemu_thread_join(&thread);
-    set_event_notifier(ctx, &data.notifier, NULL);
-    event_notifier_cleanup(&data.notifier);
+    set_event_notifier(ctx, &notifier, NULL);
+    event_notifier_cleanup(&notifier);
 
     g_assert(data.thread_acquired);
 }
@@ -390,7 +381,7 @@ static void test_aio_external_client(void)
     for (i = 1; i < 3; i++) {
         EventNotifierTestData data = { .n = 0, .active = 10, .auto_set = true };
         event_notifier_init(&data.e, false);
-        aio_set_event_notifier(ctx, &data.e, true, event_ready_cb, NULL);
+        aio_set_event_notifier(ctx, &data.e, true, event_ready_cb);
         event_notifier_set(&data.e);
         for (j = 0; j < i; j++) {
             aio_disable_external(ctx);
@@ -460,7 +451,7 @@ static void test_timer_schedule(void)
 {
     TimerTestData data = { .n = 0, .ctx = ctx, .ns = SCALE_MS * 750LL,
                            .max = 2,
-                           .clock_type = QEMU_CLOCK_REALTIME };
+                           .clock_type = QEMU_CLOCK_VIRTUAL };
     EventNotifier e;
 
     /* aio_poll will not block to wait for timers to complete unless it has
@@ -790,7 +781,7 @@ static void test_source_timer_schedule(void)
 {
     TimerTestData data = { .n = 0, .ctx = ctx, .ns = SCALE_MS * 750LL,
                            .max = 2,
-                           .clock_type = QEMU_CLOCK_REALTIME };
+                           .clock_type = QEMU_CLOCK_VIRTUAL };
     EventNotifier e;
     int64_t expiry;
 
@@ -829,59 +820,26 @@ static void test_source_timer_schedule(void)
     timer_del(&data.timer);
 }
 
-/*
- * Check that aio_co_enter() can chain many times
- *
- * Two coroutines should be able to invoke each other via aio_co_enter() many
- * times without hitting a limit like stack exhaustion.  In other words, the
- * calls should be chained instead of nested.
- */
-
-typedef struct {
-    Coroutine *other;
-    unsigned i;
-    unsigned max;
-} ChainData;
-
-static void coroutine_fn chain(void *opaque)
-{
-    ChainData *data = opaque;
-
-    for (data->i = 0; data->i < data->max; data->i++) {
-        /* Queue up the other coroutine... */
-        aio_co_enter(ctx, data->other);
-
-        /* ...and give control to it */
-        qemu_coroutine_yield();
-    }
-}
-
-static void test_queue_chaining(void)
-{
-    /* This number of iterations hit stack exhaustion in the past: */
-    ChainData data_a = { .max = 25000 };
-    ChainData data_b = { .max = 25000 };
-
-    data_b.other = qemu_coroutine_create(chain, &data_a);
-    data_a.other = qemu_coroutine_create(chain, &data_b);
-
-    qemu_coroutine_enter(data_b.other);
-
-    g_assert_cmpint(data_a.i, ==, data_a.max);
-    g_assert_cmpint(data_b.i, ==, data_b.max - 1);
-
-    /* Allow the second coroutine to terminate */
-    qemu_coroutine_enter(data_a.other);
-
-    g_assert_cmpint(data_b.i, ==, data_b.max);
-}
 
 /* End of tests.  */
 
 int main(int argc, char **argv)
 {
-    qemu_init_main_loop(&error_fatal);
-    ctx = qemu_get_aio_context();
+    Error *local_error = NULL;
+    GSource *src;
+
+    init_clocks();
+
+    ctx = aio_context_new(&local_error);
+    if (!ctx) {
+        error_report("Failed to create AIO Context: '%s'",
+                     error_get_pretty(local_error));
+        error_free(local_error);
+        exit(1);
+    }
+    src = aio_get_g_source(ctx);
+    g_source_attach(src, NULL);
+    g_source_unref(src);
 
     while (g_main_context_iteration(NULL, false));
 
@@ -900,8 +858,6 @@ int main(int argc, char **argv)
     g_test_add_func("/aio/event/flush",             test_flush_event_notifier);
     g_test_add_func("/aio/external-client",         test_aio_external_client);
     g_test_add_func("/aio/timer/schedule",          test_timer_schedule);
-
-    g_test_add_func("/aio/coroutine/queue-chaining", test_queue_chaining);
 
     g_test_add_func("/aio-gsource/flush",                   test_source_flush);
     g_test_add_func("/aio-gsource/bh/schedule",             test_source_bh_schedule);

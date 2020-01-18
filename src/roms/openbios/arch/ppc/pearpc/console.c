@@ -4,7 +4,7 @@
  *
  *      Simple text console
  *
- *   Copyright (C) 2005 Stefan Reinauer
+ *   Copyright (C) 2005 Stefan Reinauer <stepan@openbios.org>
  *
  *   This program is free software; you can redistribute it and/or
  *   modify it under the terms of the GNU General Public License

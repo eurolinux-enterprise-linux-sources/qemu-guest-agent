@@ -68,7 +68,7 @@ enum usb_pid {
 struct usb_setup_packet {
 	/** Request */
 	uint16_t request;
-	/** Value parameter */
+	/** Value paramer */
 	uint16_t value;
 	/** Index parameter */
 	uint16_t index;
@@ -90,9 +90,6 @@ struct usb_setup_packet {
 
 /** Vendor-specific request type */
 #define USB_TYPE_VENDOR ( 2 << 5 )
-
-/** Request recipient mask */
-#define USB_RECIP_MASK ( 0x1f << 0 )
 
 /** Request recipient is the device */
 #define USB_RECIP_DEVICE ( 0 << 0 )
@@ -222,9 +219,6 @@ struct usb_string_descriptor {
 
 /** A USB string descriptor */
 #define USB_STRING_DESCRIPTOR 3
-
-/** Language ID for English */
-#define USB_LANG_ENGLISH 0x0409
 
 /** A USB interface descriptor */
 struct usb_interface_descriptor {
@@ -417,9 +411,7 @@ struct usb_endpoint {
 
 	/** Recycled I/O buffer list */
 	struct list_head recycled;
-	/** Refill buffer reserved header length */
-	size_t reserve;
-	/** Refill buffer payload length */
+	/** Refill buffer length */
 	size_t len;
 	/** Maximum fill level */
 	unsigned int max;
@@ -463,11 +455,11 @@ struct usb_endpoint_host_operations {
 	 *
 	 * @v ep		USB endpoint
 	 * @v iobuf		I/O buffer
-	 * @v zlp		Append a zero-length packet
+	 * @v terminate		Terminate using a short packet
 	 * @ret rc		Return status code
 	 */
 	int ( * stream ) ( struct usb_endpoint *ep, struct io_buffer *iobuf,
-			   int zlp );
+			   int terminate );
 };
 
 /** USB endpoint driver operations */
@@ -593,16 +585,13 @@ extern void usb_complete_err ( struct usb_endpoint *ep,
  * Initialise USB endpoint refill
  *
  * @v ep		USB endpoint
- * @v reserve		Refill buffer reserved header length
- * @v len		Refill buffer payload length (zero for endpoint's MTU)
+ * @v len		Refill buffer length (or zero to use endpoint's MTU)
  * @v max		Maximum fill level
  */
 static inline __attribute__ (( always_inline )) void
-usb_refill_init ( struct usb_endpoint *ep, size_t reserve, size_t len,
-		  unsigned int max ) {
+usb_refill_init ( struct usb_endpoint *ep, size_t len, unsigned int max ) {
 
 	INIT_LIST_HEAD ( &ep->recycled );
-	ep->reserve = reserve;
 	ep->len = len;
 	ep->max = max;
 }
@@ -623,31 +612,6 @@ extern int usb_prefill ( struct usb_endpoint *ep );
 extern int usb_refill ( struct usb_endpoint *ep );
 extern void usb_flush ( struct usb_endpoint *ep );
 
-/** A USB class descriptor */
-union usb_class_descriptor {
-	/** Class */
-	struct usb_class class;
-	/** Scalar value */
-	uint32_t scalar;
-};
-
-/**
- * A USB function descriptor
- *
- * This is an internal descriptor used to represent an association of
- * interfaces within a USB device.
- */
-struct usb_function_descriptor {
-	/** Vendor ID */
-	uint16_t vendor;
-	/** Product ID */
-	uint16_t product;
-	/** Class */
-	union usb_class_descriptor class;
-	/** Number of interfaces */
-	unsigned int count;
-};
-
 /**
  * A USB function
  *
@@ -659,8 +623,10 @@ struct usb_function {
 	const char *name;
 	/** USB device */
 	struct usb_device *usb;
-	/** Function descriptor */
-	struct usb_function_descriptor desc;
+	/** Class */
+	struct usb_class class;
+	/** Number of interfaces */
+	unsigned int count;
 	/** Generic device */
 	struct device dev;
 	/** List of functions within this USB device */
@@ -670,8 +636,6 @@ struct usb_function {
 	struct usb_driver *driver;
 	/** Driver private data */
 	void *priv;
-	/** Driver device ID */
-	struct usb_device_id *id;
 
 	/** List of interface numbers
 	 *
@@ -708,8 +672,6 @@ struct usb_device {
 	char name[32];
 	/** USB port */
 	struct usb_port *port;
-	/** Device speed */
-	unsigned int speed;
 	/** List of devices on this bus */
 	struct list_head list;
 	/** Device address, if assigned */
@@ -731,9 +693,6 @@ struct usb_device {
 	struct usb_endpoint control;
 	/** Completed control transfers */
 	struct list_head complete;
-
-	/** Default language ID (if known) */
-	unsigned int language;
 };
 
 /** USB device host controller operations */
@@ -1199,7 +1158,7 @@ usb_get_device_descriptor ( struct usb_device *usb,
  * @v data		Configuration descriptor to fill in
  * @ret rc		Return status code
  */
-static inline __attribute__ (( always_inline )) int
+static inline __attribute (( always_inline )) int
 usb_get_config_descriptor ( struct usb_device *usb, unsigned int index,
 			    struct usb_configuration_descriptor *data,
 			    size_t len ) {
@@ -1321,43 +1280,12 @@ struct usb_device_id {
 	uint16_t vendor;
 	/** Product ID */
 	uint16_t product;
-	/** Arbitrary driver data */
-	unsigned long driver_data;
+	/** Class */
+	struct usb_class class;
 };
 
 /** Match-anything ID */
 #define USB_ANY_ID 0xffff
-
-/** A USB class ID */
-struct usb_class_id {
-	/** Class */
-	union usb_class_descriptor class;
-	/** Class mask */
-	union usb_class_descriptor mask;
-};
-
-/** Construct USB class ID
- *
- * @v base		Base class code (or USB_ANY_ID)
- * @v subclass		Subclass code (or USB_ANY_ID)
- * @v protocol		Protocol code (or USB_ANY_ID)
- */
-#define USB_CLASS_ID( base, subclass, protocol ) {			\
-	.class = {							\
-		.class = {						\
-			( (base) & 0xff ),				\
-			( (subclass) & 0xff ),				\
-			( (protocol) & 0xff ),				\
-		},							\
-	},								\
-	.mask = {							\
-		.class = {						\
-			( ( (base) == USB_ANY_ID ) ? 0x00 : 0xff ),	\
-			( ( (subclass) == USB_ANY_ID ) ? 0x00 : 0xff ),	\
-			( ( (protocol) == USB_ANY_ID ) ? 0x00 : 0xff ),	\
-		},							\
-		},							\
-	}
 
 /** A USB driver */
 struct usb_driver {
@@ -1365,14 +1293,6 @@ struct usb_driver {
 	struct usb_device_id *ids;
 	/** Number of entries in ID table */
 	unsigned int id_count;
-	/** Class ID */
-	struct usb_class_id class;
-	/** Driver score
-	 *
-	 * This is used to determine the preferred configuration for a
-	 * USB device.
-	 */
-	unsigned int score;
 	/**
 	 * Probe device
 	 *
@@ -1395,19 +1315,5 @@ struct usb_driver {
 
 /** Declare a USB driver */
 #define __usb_driver __table_entry ( USB_DRIVERS, 01 )
-
-/** USB driver scores */
-enum usb_driver_score {
-	/** Fallback driver (has no effect on overall score) */
-	USB_SCORE_FALLBACK = 0,
-	/** Deprecated driver */
-	USB_SCORE_DEPRECATED = 1,
-	/** Normal driver */
-	USB_SCORE_NORMAL = 2,
-};
-
-extern struct usb_driver *
-usb_find_driver ( struct usb_function_descriptor *desc,
-		  struct usb_device_id **id );
 
 #endif /* _IPXE_USB_H */

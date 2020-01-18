@@ -126,11 +126,6 @@ CONSTANT /gpt-part-entry
    debug-disk-label? IF dup ." actual=" .d cr THEN
 ;
 
-: write ( addr len -- actual )
-   debug-disk-label? IF 2dup swap ." write-parent: addr=0x" u. ." len=" .d THEN
-   s" write" $call-parent
-   debug-disk-label? IF dup ." actual=" .d cr THEN
-;
 
 \ read sector to array "block"
 : read-sector ( sector-number -- )

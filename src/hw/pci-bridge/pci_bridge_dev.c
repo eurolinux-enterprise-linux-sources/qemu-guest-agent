@@ -19,8 +19,6 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "hw/pci/pci_bridge.h"
 #include "hw/pci/pci_ids.h"
 #include "hw/pci/msi.h"
@@ -42,67 +40,52 @@ struct PCIBridgeDev {
 
     MemoryRegion bar;
     uint8_t chassis_nr;
-#define PCI_BRIDGE_DEV_F_SHPC_REQ 0
+#define PCI_BRIDGE_DEV_F_MSI_REQ 0
+#define PCI_BRIDGE_DEV_F_SHPC_REQ 1
     uint32_t flags;
-
-    OnOffAuto msi;
 };
 typedef struct PCIBridgeDev PCIBridgeDev;
 
-static void pci_bridge_dev_realize(PCIDevice *dev, Error **errp)
+static int pci_bridge_dev_initfn(PCIDevice *dev)
 {
     PCIBridge *br = PCI_BRIDGE(dev);
     PCIBridgeDev *bridge_dev = PCI_BRIDGE_DEV(dev);
     int err;
-    Error *local_err = NULL;
 
-    pci_bridge_initfn(dev, TYPE_PCI_BUS);
-
+    err = pci_bridge_initfn(dev, TYPE_PCI_BUS);
+    if (err) {
+        goto bridge_error;
+    }
     if (bridge_dev->flags & (1 << PCI_BRIDGE_DEV_F_SHPC_REQ)) {
         dev->config[PCI_INTERRUPT_PIN] = 0x1;
         memory_region_init(&bridge_dev->bar, OBJECT(dev), "shpc-bar",
                            shpc_bar_size(dev));
-        err = shpc_init(dev, &br->sec_bus, &bridge_dev->bar, 0, errp);
+        err = shpc_init(dev, &br->sec_bus, &bridge_dev->bar, 0);
         if (err) {
             goto shpc_error;
         }
     } else {
         /* MSI is not applicable without SHPC */
-        bridge_dev->msi = ON_OFF_AUTO_OFF;
+        bridge_dev->flags &= ~(1 << PCI_BRIDGE_DEV_F_MSI_REQ);
     }
-
-    err = slotid_cap_init(dev, 0, bridge_dev->chassis_nr, 0, errp);
+    err = slotid_cap_init(dev, 0, bridge_dev->chassis_nr, 0);
     if (err) {
         goto slotid_error;
     }
-
-    if (bridge_dev->msi != ON_OFF_AUTO_OFF) {
-        /* it means SHPC exists, because MSI is needed by SHPC */
-
-        err = msi_init(dev, 0, 1, true, true, &local_err);
-        /* Any error other than -ENOTSUP(board's MSI support is broken)
-         * is a programming error */
-        assert(!err || err == -ENOTSUP);
-        if (err && bridge_dev->msi == ON_OFF_AUTO_ON) {
-            /* Can't satisfy user's explicit msi=on request, fail */
-            error_append_hint(&local_err, "You have to use msi=auto (default) "
-                    "or msi=off with this machine type.\n");
-            error_propagate(errp, local_err);
+    if ((bridge_dev->flags & (1 << PCI_BRIDGE_DEV_F_MSI_REQ)) &&
+        msi_supported) {
+        err = msi_init(dev, 0, 1, true, true);
+        if (err < 0) {
             goto msi_error;
         }
-        assert(!local_err || bridge_dev->msi == ON_OFF_AUTO_AUTO);
-        /* With msi=auto, we fall back to MSI off silently */
-        error_free(local_err);
     }
-
     if (shpc_present(dev)) {
         /* TODO: spec recommends using 64 bit prefetcheable BAR.
          * Check whether that works well. */
         pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY |
                          PCI_BASE_ADDRESS_MEM_TYPE_64, &bridge_dev->bar);
     }
-    return;
-
+    return 0;
 msi_error:
     slotid_cap_cleanup(dev);
 slotid_error:
@@ -111,6 +94,8 @@ slotid_error:
     }
 shpc_error:
     pci_bridge_exitfn(dev);
+bridge_error:
+    return err;
 }
 
 static void pci_bridge_dev_exitfn(PCIDevice *dev)
@@ -158,8 +143,8 @@ static Property pci_bridge_dev_properties[] = {
                     /* Note: 0 is not a legal chassis number. */
     DEFINE_PROP_UINT8(PCI_BRIDGE_DEV_PROP_CHASSIS_NR, PCIBridgeDev, chassis_nr,
                       0),
-    DEFINE_PROP_ON_OFF_AUTO(PCI_BRIDGE_DEV_PROP_MSI, PCIBridgeDev, msi,
-                            ON_OFF_AUTO_AUTO),
+    DEFINE_PROP_BIT(PCI_BRIDGE_DEV_PROP_MSI, PCIBridgeDev, flags,
+                    PCI_BRIDGE_DEV_F_MSI_REQ, true),
     DEFINE_PROP_BIT(PCI_BRIDGE_DEV_PROP_SHPC, PCIBridgeDev, flags,
                     PCI_BRIDGE_DEV_F_SHPC_REQ, true),
     DEFINE_PROP_END_OF_LIST(),
@@ -174,7 +159,6 @@ static bool pci_device_shpc_present(void *opaque, int version_id)
 
 static const VMStateDescription pci_bridge_dev_vmstate = {
     .name = "pci_bridge",
-    .priority = MIG_PRI_PCI_BUS,
     .fields = (VMStateField[]) {
         VMSTATE_PCI_DEVICE(parent_obj, PCIBridge),
         SHPC_VMSTATE(shpc, PCIDevice, pci_device_shpc_present),
@@ -215,7 +199,7 @@ static void pci_bridge_dev_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
     HotplugHandlerClass *hc = HOTPLUG_HANDLER_CLASS(klass);
 
-    k->realize = pci_bridge_dev_realize;
+    k->init = pci_bridge_dev_initfn;
     k->exit = pci_bridge_dev_exitfn;
     k->config_write = pci_bridge_dev_write_config;
     k->vendor_id = PCI_VENDOR_ID_REDHAT;
@@ -239,7 +223,6 @@ static const TypeInfo pci_bridge_dev_info = {
     .instance_finalize = pci_bridge_dev_instance_finalize,
     .interfaces = (InterfaceInfo[]) {
         { TYPE_HOTPLUG_HANDLER },
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { }
     }
 };

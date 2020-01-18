@@ -19,12 +19,13 @@ from tracetool import out
 PUBLIC = True
 
 
-def generate_h_begin(events, group):
+def generate_h_begin(events):
     out('#include "trace/ftrace.h"',
+        '#include "trace/control.h"',
         '')
 
 
-def generate_h(event, group):
+def generate_h(event):
     argnames = ", ".join(event.args.names())
     if len(event.args) > 0:
         argnames = ", " + argnames
@@ -45,8 +46,3 @@ def generate_h(event, group):
         event_id="TRACE_" + event.name.upper(),
         fmt=event.fmt.rstrip("\n"),
         argnames=argnames)
-
-
-def generate_h_backend_dstate(event, group):
-    out('    trace_event_get_state_dynamic_by_id(%(event_id)s) || \\',
-        event_id="TRACE_" + event.name.upper())

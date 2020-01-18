@@ -8,7 +8,6 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
 #include "sysemu/qtest.h"
 
 /* Needed for qtest_allowed() */

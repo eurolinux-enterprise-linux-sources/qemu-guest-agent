@@ -1,5 +1,5 @@
-#ifndef OPENRISC_TARGET_SIGNAL_H
-#define OPENRISC_TARGET_SIGNAL_H
+#ifndef TARGET_SIGNAL_H
+#define TARGET_SIGNAL_H
 
 #include "cpu.h"
 
@@ -20,8 +20,7 @@ typedef struct target_sigaltstack {
 
 static inline abi_ulong get_sp_from_cpustate(CPUOpenRISCState *state)
 {
-    return cpu_get_gpr(state, 1);
+    return state->gpr[1];
 }
 
-
-#endif /* OPENRISC_TARGET_SIGNAL_H */
+#endif /* TARGET_SIGNAL_H */

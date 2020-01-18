@@ -30,8 +30,8 @@
  * mbuf.h,v 1.9 1994/11/14 13:54:20 bde Exp
  */
 
-#ifndef MBUF_H
-#define MBUF_H
+#ifndef _MBUF_H_
+#define _MBUF_H_
 
 #define MINCSIZE 4096	/* Amount to increase mbuf if too small */
 
@@ -79,11 +79,13 @@ struct mbuf {
 	int	m_len;			/* Amount of data in this mbuf */
 
 	Slirp *slirp;
-	bool	resolution_requested;
+	bool	arp_requested;
 	uint64_t expiration_date;
-	char   *m_ext;
 	/* start of dynamic buffer area, must be last element */
-	char    m_dat[];
+	union {
+		char	m_dat[1]; /* ANSI don't like 0 sized arrays */
+		char	*m_ext;
+	};
 };
 
 #define ifq_prev m_prev

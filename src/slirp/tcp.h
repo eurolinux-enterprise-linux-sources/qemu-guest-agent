@@ -30,8 +30,8 @@
  * tcp.h,v 1.3 1994/08/21 05:27:34 paul Exp
  */
 
-#ifndef TCP_H
-#define TCP_H
+#ifndef _TCP_H_
+#define _TCP_H_
 
 typedef	uint32_t tcp_seq;
 
@@ -106,8 +106,6 @@ struct tcphdr {
  */
 #undef TCP_MSS
 #define	TCP_MSS	1460
-#undef TCP6_MSS
-#define TCP6_MSS 1440
 
 #undef TCP_MAXWIN
 #define	TCP_MAXWIN	65535	/* largest value for (unscaled) window */

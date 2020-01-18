@@ -31,7 +31,6 @@
 #include <ipxe/socket.h>
 
 /* This hack prevents pre-2.6.32 headers from redefining struct sockaddr */
-#define _SYS_SOCKET_H
 #define __GLIBC__ 2
 #include <linux/socket.h>
 #undef __GLIBC__

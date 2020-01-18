@@ -18,8 +18,8 @@
  *
  */
 
-#ifndef QCRYPTO_TLSCREDSANON_H
-#define QCRYPTO_TLSCREDSANON_H
+#ifndef QCRYPTO_TLSCRED_ANON_H__
+#define QCRYPTO_TLSCRED_ANON_H__
 
 #include "crypto/tlscreds.h"
 
@@ -108,4 +108,5 @@ struct QCryptoTLSCredsAnonClass {
 };
 
 
-#endif /* QCRYPTO_TLSCREDSANON_H */
+#endif /* QCRYPTO_TLSCRED_H__ */
+

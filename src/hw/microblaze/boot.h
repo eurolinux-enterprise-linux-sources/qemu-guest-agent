@@ -1,5 +1,5 @@
-#ifndef MICROBLAZE_BOOT_H
-#define MICROBLAZE_BOOT_H
+#ifndef __MICROBLAZE_BOOT__
+#define __MICROBLAZE_BOOT__
 
 #include "hw/hw.h"
 
@@ -9,4 +9,4 @@ void microblaze_load_kernel(MicroBlazeCPU *cpu, hwaddr ddr_base,
                             const char *dtb_filename,
                             void (*machine_cpu_reset)(MicroBlazeCPU *));
 
-#endif /* MICROBLAZE_BOOT_H */
+#endif /* __MICROBLAZE_BOOT __ */

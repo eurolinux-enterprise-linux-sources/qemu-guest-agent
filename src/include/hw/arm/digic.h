@@ -19,6 +19,7 @@
 #define HW_ARM_DIGIC_H
 
 #include "cpu.h"
+
 #include "hw/timer/digic-timer.h"
 #include "hw/char/digic-uart.h"
 

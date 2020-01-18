@@ -1,5 +1,5 @@
-#ifndef SH4_TARGET_SIGNAL_H
-#define SH4_TARGET_SIGNAL_H
+#ifndef TARGET_SIGNAL_H
+#define TARGET_SIGNAL_H
 
 #include "cpu.h"
 
@@ -26,5 +26,4 @@ static inline abi_ulong get_sp_from_cpustate(CPUSH4State *state)
     return state->gregs[15];
 }
 
-
-#endif /* SH4_TARGET_SIGNAL_H */
+#endif /* TARGET_SIGNAL_H */

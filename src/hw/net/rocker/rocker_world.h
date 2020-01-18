@@ -14,8 +14,8 @@
  * GNU General Public License for more details.
  */
 
-#ifndef ROCKER_WORLD_H
-#define ROCKER_WORLD_H
+#ifndef _ROCKER_WORLD_H_
+#define _ROCKER_WORLD_H_
 
 #include "rocker_hw.h"
 
@@ -33,7 +33,6 @@ typedef int (world_cmd)(World *world, DescInfo *info,
                         RockerTlv *cmd_info_tlv);
 
 typedef struct world_ops {
-    const char *name;
     world_init *init;
     world_uninit *uninit;
     world_ig *ig;
@@ -58,4 +57,4 @@ const char *world_name(World *world);
 
 World *rocker_get_world(Rocker *r, enum rocker_world_type type);
 
-#endif /* ROCKER_WORLD_H */
+#endif /* _ROCKER_WORLD_H_ */

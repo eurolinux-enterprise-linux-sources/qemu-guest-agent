@@ -1,5 +1,5 @@
-#ifndef HW_CRIS_BOOT_H
-#define HW_CRIS_BOOT_H
+#ifndef _CRIS_BOOT_H
+#define HW_CRIS_BOOT_H 1
 
 struct cris_load_info
 {

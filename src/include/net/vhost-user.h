@@ -8,11 +8,10 @@
  *
  */
 
-#ifndef VHOST_USER_H
-#define VHOST_USER_H
+#ifndef VHOST_USER_H_
+#define VHOST_USER_H_
 
 struct vhost_net;
 struct vhost_net *vhost_user_get_vhost_net(NetClientState *nc);
-uint64_t vhost_user_get_acked_features(NetClientState *nc);
 
-#endif /* VHOST_USER_H */
+#endif /* VHOST_USER_H_ */

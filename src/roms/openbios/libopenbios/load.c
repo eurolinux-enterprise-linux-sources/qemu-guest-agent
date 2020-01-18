@@ -17,7 +17,6 @@
 #include "config.h"
 #include "kernel/kernel.h"
 #include "libopenbios/bindings.h"
-#include "libopenbios/initprogram.h"
 #include "libopenbios/sys_info.h"
 #include "libopenbios/load.h"
 
@@ -37,10 +36,6 @@
 #include "libopenbios/forth_load.h"
 #endif
 
-#ifdef CONFIG_LOADER_XCOFF
-#include "libopenbios/xcoff_load.h"
-#endif
-
 #ifdef CONFIG_LOADER_BOOTCODE
 #include "libopenbios/bootcode_load.h"
 #endif
@@ -55,6 +50,7 @@ void load(ihandle_t dev)
 {
 	/* Invoke the loaders on the specified device */
 	char *param;
+	ucell valid;
 
 	/* TODO: Currently the internal loader APIs use load-base directly, so
 	   drop the address */
@@ -71,45 +67,53 @@ void load(ihandle_t dev)
 	POP();
 	param = pop_fstr_copy();
 
-	if (elf_load(&sys_info, dev, param, &elf_boot_notes) != LOADER_NOT_SUPPORT) {
-            feval("load-state >ls.file-size @");
-            return;
+	elf_load(&sys_info, dev, param, &elf_boot_notes);
+        feval("state-valid @");
+        valid = POP();
+        if (valid) {
+                feval("saved-program-state >sps.file-size @");
+                return;
         }
 #endif
 
 #ifdef CONFIG_LOADER_AOUT
-	if (aout_load(&sys_info, dev) != LOADER_NOT_SUPPORT) {
-            feval("load-state >ls.file-size @");
-            return;
+	aout_load(&sys_info, dev);
+        feval("state-valid @");
+        valid = POP();
+        if (valid) {
+                feval("saved-program-state >sps.file-size @");
+                return;
         }
 #endif
 
 #ifdef CONFIG_LOADER_FCODE
-	if (fcode_load(dev) != LOADER_NOT_SUPPORT) {
-            feval("load-state >ls.file-size @");
-            return;
+	fcode_load(dev);
+        feval("state-valid @");
+        valid = POP();
+        if (valid) {
+                feval("saved-program-state >sps.file-size @");
+                return;
         }
 #endif
 
 #ifdef CONFIG_LOADER_FORTH
-	if (forth_load(dev) != LOADER_NOT_SUPPORT) {
-            feval("load-state >ls.file-size @");
-            return;
-        }
-#endif
-
-#ifdef CONFIG_LOADER_XCOFF
-	if (xcoff_load(dev) != LOADER_NOT_SUPPORT) {
-            feval("load-state >ls.file-size @");
-            return;
+	forth_load(dev);
+        feval("state-valid @");
+        valid = POP();
+        if (valid) {
+                feval("saved-program-state >sps.file-size @");
+                return;
         }
 #endif
 
 #ifdef CONFIG_LOADER_BOOTCODE
 	/* Check for a "raw" %BOOT bootcode payload */
-	if (bootcode_load(dev) != LOADER_NOT_SUPPORT) {
-            feval("load-state >ls.file-size @");
-            return;
+	bootcode_load(dev);
+        feval("state-valid @");
+        valid = POP();
+        if (valid) {
+                feval("saved-program-state >sps.file-size @");
+                return;
         }
 #endif
 

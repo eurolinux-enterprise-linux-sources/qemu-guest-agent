@@ -24,9 +24,7 @@
  * uses PMU INFORM5 register as a holding pen.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "sysemu/sysemu.h"
 
 #ifndef DEBUG_PMU
 #define DEBUG_PMU           0
@@ -351,11 +349,7 @@ static const Exynos4210PmuReg exynos4210_pmu_regs[] = {
     {"PAD_RETENTION_MMCB_OPTION", PAD_RETENTION_MMCB_OPTION, 0x00000000},
     {"PAD_RETENTION_EBIA_OPTION", PAD_RETENTION_EBIA_OPTION, 0x00000000},
     {"PAD_RETENTION_EBIB_OPTION", PAD_RETENTION_EBIB_OPTION, 0x00000000},
-    /*
-     * PS_HOLD_CONTROL: reset value and manually toggle high the DATA bit.
-     * DATA bit high, set usually by bootloader, keeps system on.
-     */
-    {"PS_HOLD_CONTROL", PS_HOLD_CONTROL, 0x00005200 | BIT(8)},
+    {"PS_HOLD_CONTROL", PS_HOLD_CONTROL, 0x00005200},
     {"XUSBXTI_CONFIGURATION", XUSBXTI_CONFIGURATION, 0x00000001},
     {"XUSBXTI_STATUS", XUSBXTI_STATUS, 0x00000001},
     {"XUSBXTI_DURATION", XUSBXTI_DURATION, 0xFFF00000},
@@ -402,18 +396,12 @@ typedef struct Exynos4210PmuState {
     uint32_t reg[PMU_NUM_OF_REGISTERS];
 } Exynos4210PmuState;
 
-static void exynos4210_pmu_poweroff(void)
-{
-    PRINT_DEBUG("QEMU PMU: PS_HOLD bit down, powering off\n");
-    qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-}
-
 static uint64_t exynos4210_pmu_read(void *opaque, hwaddr offset,
                                     unsigned size)
 {
     Exynos4210PmuState *s = (Exynos4210PmuState *)opaque;
+    unsigned i;
     const Exynos4210PmuReg *reg_p = exynos4210_pmu_regs;
-    unsigned int i;
 
     for (i = 0; i < PMU_NUM_OF_REGISTERS; i++) {
         if (reg_p->offset == offset) {
@@ -431,21 +419,14 @@ static void exynos4210_pmu_write(void *opaque, hwaddr offset,
                                  uint64_t val, unsigned size)
 {
     Exynos4210PmuState *s = (Exynos4210PmuState *)opaque;
+    unsigned i;
     const Exynos4210PmuReg *reg_p = exynos4210_pmu_regs;
-    unsigned int i;
 
     for (i = 0; i < PMU_NUM_OF_REGISTERS; i++) {
         if (reg_p->offset == offset) {
             PRINT_DEBUG_EXTEND("%s <0x%04x> <- 0x%04x\n", reg_p->name,
                     (uint32_t)offset, (uint32_t)val);
             s->reg[i] = val;
-            if ((offset == PS_HOLD_CONTROL) && ((val & BIT(8)) == 0)) {
-                /*
-                 * We are interested only in setting data bit
-                 * of PS_HOLD_CONTROL register to indicate power off request.
-                 */
-                exynos4210_pmu_poweroff();
-            }
             return;
         }
         reg_p++;
@@ -475,15 +456,15 @@ static void exynos4210_pmu_reset(DeviceState *dev)
     }
 }
 
-static void exynos4210_pmu_init(Object *obj)
+static int exynos4210_pmu_init(SysBusDevice *dev)
 {
-    Exynos4210PmuState *s = EXYNOS4210_PMU(obj);
-    SysBusDevice *dev = SYS_BUS_DEVICE(obj);
+    Exynos4210PmuState *s = EXYNOS4210_PMU(dev);
 
     /* memory mapping */
-    memory_region_init_io(&s->iomem, obj, &exynos4210_pmu_ops, s,
+    memory_region_init_io(&s->iomem, OBJECT(dev), &exynos4210_pmu_ops, s,
                           "exynos4210.pmu", EXYNOS4210_PMU_REGS_MEM_SIZE);
     sysbus_init_mmio(dev, &s->iomem);
+    return 0;
 }
 
 static const VMStateDescription exynos4210_pmu_vmstate = {
@@ -499,7 +480,9 @@ static const VMStateDescription exynos4210_pmu_vmstate = {
 static void exynos4210_pmu_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
+    k->init = exynos4210_pmu_init;
     dc->reset = exynos4210_pmu_reset;
     dc->vmsd = &exynos4210_pmu_vmstate;
 }
@@ -508,7 +491,6 @@ static const TypeInfo exynos4210_pmu_info = {
     .name          = TYPE_EXYNOS4210_PMU,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(Exynos4210PmuState),
-    .instance_init = exynos4210_pmu_init,
     .class_init    = exynos4210_pmu_class_init,
 };
 

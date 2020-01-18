@@ -209,8 +209,7 @@ static inline void * legacy_isa_get_drvdata ( void *hwdev ) {
 
 #undef DRIVER
 #define DRIVER(_name_text,_unused2,_unused3,_name,_probe,_disable)	  \
-	static __attribute__ (( unused )) const char			  \
-	_name ## _text[] = _name_text;					  \
+	static const char _name ## _text[] = _name_text;		  \
 	static inline int						  \
 	_name ## _probe ( struct nic *nic, void *hwdev ) {		  \
 		return _probe ( nic, hwdev );				  \

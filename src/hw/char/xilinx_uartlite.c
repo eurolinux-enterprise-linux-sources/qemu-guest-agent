@@ -22,9 +22,8 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 
 #define DUART(x)
 
@@ -55,7 +54,7 @@ typedef struct XilinxUARTLite {
     SysBusDevice parent_obj;
 
     MemoryRegion mmio;
-    CharBackend chr;
+    CharDriverState *chr;
     qemu_irq irq;
 
     uint8_t rx_fifo[8];
@@ -107,7 +106,7 @@ uart_read(void *opaque, hwaddr addr, unsigned int size)
                 s->rx_fifo_len--;
             uart_update_status(s);
             uart_update_irq(s);
-            qemu_chr_fe_accept_input(&s->chr);
+            qemu_chr_accept_input(s->chr);
             break;
 
         default:
@@ -143,9 +142,9 @@ uart_write(void *opaque, hwaddr addr,
             break;
 
         case R_TX:
-            /* XXX this blocks entire thread. Rewrite to use
-             * qemu_chr_fe_write and background I/O callbacks */
-            qemu_chr_fe_write_all(&s->chr, &ch, 1);
+            if (s->chr)
+                qemu_chr_fe_write(s->chr, &ch, 1);
+
             s->regs[addr] = value;
 
             /* hax.  */
@@ -170,11 +169,6 @@ static const MemoryRegionOps uart_ops = {
         .min_access_size = 1,
         .max_access_size = 4
     }
-};
-
-static Property xilinx_uartlite_properties[] = {
-    DEFINE_PROP_CHR("chardev", XilinxUARTLite, chr),
-    DEFINE_PROP_END_OF_LIST(),
 };
 
 static void uart_rx(void *opaque, const uint8_t *buf, int size)
@@ -211,8 +205,10 @@ static void xilinx_uartlite_realize(DeviceState *dev, Error **errp)
 {
     XilinxUARTLite *s = XILINX_UARTLITE(dev);
 
-    qemu_chr_fe_set_handlers(&s->chr, uart_can_rx, uart_rx,
-                             uart_event, NULL, s, NULL, true);
+    /* FIXME use a qdev chardev prop instead of qemu_char_get_next_serial() */
+    s->chr = qemu_char_get_next_serial();
+    if (s->chr)
+        qemu_chr_add_handlers(s->chr, uart_can_rx, uart_rx, uart_event, s);
 }
 
 static void xilinx_uartlite_init(Object *obj)
@@ -232,7 +228,8 @@ static void xilinx_uartlite_class_init(ObjectClass *klass, void *data)
 
     dc->reset = xilinx_uartlite_reset;
     dc->realize = xilinx_uartlite_realize;
-    dc->props = xilinx_uartlite_properties;
+    /* Reason: realize() method uses qemu_char_get_next_serial() */
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo xilinx_uartlite_info = {

@@ -7,7 +7,6 @@
  * This file is licensed under GNU GPL.
  */
 
-#include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
 
 #define TYPE_MAX7310 "max7310"
@@ -67,7 +66,7 @@ static int max7310_rx(I2CSlave *i2c)
 
     default:
 #ifdef VERBOSE
-        printf("%s: unknown register %02x\n", __func__, s->command);
+        printf("%s: unknown register %02x\n", __FUNCTION__, s->command);
 #endif
         break;
     }
@@ -82,7 +81,7 @@ static int max7310_tx(I2CSlave *i2c, uint8_t data)
 
     if (s->len ++ > 1) {
 #ifdef VERBOSE
-        printf("%s: message too long (%i bytes)\n", __func__, s->len);
+        printf("%s: message too long (%i bytes)\n", __FUNCTION__, s->len);
 #endif
         return 1;
     }
@@ -121,7 +120,7 @@ static int max7310_tx(I2CSlave *i2c, uint8_t data)
 	break;
     default:
 #ifdef VERBOSE
-        printf("%s: unknown register %02x\n", __func__, s->command);
+        printf("%s: unknown register %02x\n", __FUNCTION__, s->command);
 #endif
         return 1;
     }
@@ -129,7 +128,7 @@ static int max7310_tx(I2CSlave *i2c, uint8_t data)
     return 0;
 }
 
-static int max7310_event(I2CSlave *i2c, enum i2c_event event)
+static void max7310_event(I2CSlave *i2c, enum i2c_event event)
 {
     MAX7310State *s = MAX7310(i2c);
     s->len = 0;
@@ -141,14 +140,12 @@ static int max7310_event(I2CSlave *i2c, enum i2c_event event)
     case I2C_FINISH:
 #ifdef VERBOSE
         if (s->len == 1)
-            printf("%s: message too short (%i bytes)\n", __func__, s->len);
+            printf("%s: message too short (%i bytes)\n", __FUNCTION__, s->len);
 #endif
         break;
     default:
         break;
     }
-
-    return 0;
 }
 
 static const VMStateDescription vmstate_max7310 = {

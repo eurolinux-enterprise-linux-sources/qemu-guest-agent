@@ -1,5 +1,2 @@
-object q_empty
-enum QType ['none', 'qnull', 'qnum', 'qstring', 'qdict', 'qlist', 'qbool']
-    prefix QTYPE
-module comments.json
+object :empty
 enum Status ['good', 'bad', 'ugly']

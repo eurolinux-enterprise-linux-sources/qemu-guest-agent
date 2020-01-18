@@ -7,10 +7,9 @@
  * (GNU GPL), version 2 or later.
  */
 
-#include "qemu/osdep.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/dma.h"
-#include "trace-root.h"
+#include "trace.h"
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
 
@@ -70,18 +69,16 @@ void qemu_sglist_destroy(QEMUSGList *qsg)
 
 typedef struct {
     BlockAIOCB common;
-    AioContext *ctx;
+    BlockBackend *blk;
     BlockAIOCB *acb;
     QEMUSGList *sg;
-    uint32_t align;
-    uint64_t offset;
+    uint64_t sector_num;
     DMADirection dir;
     int sg_cur_index;
     dma_addr_t sg_cur_byte;
     QEMUIOVector iov;
     QEMUBH *bh;
     DMAIOFunc *io_func;
-    void *io_func_opaque;
 } DMAAIOCB;
 
 static void dma_blk_cb(void *opaque, int ret);
@@ -132,7 +129,7 @@ static void dma_blk_cb(void *opaque, int ret)
     trace_dma_blk_cb(dbs, ret);
 
     dbs->acb = NULL;
-    dbs->offset += dbs->iov.size;
+    dbs->sector_num += dbs->iov.size / 512;
 
     if (dbs->sg_cur_index == dbs->sg->nsg || ret < 0) {
         dma_complete(dbs, ret);
@@ -156,20 +153,18 @@ static void dma_blk_cb(void *opaque, int ret)
 
     if (dbs->iov.size == 0) {
         trace_dma_map_wait(dbs);
-        dbs->bh = aio_bh_new(dbs->ctx, reschedule_dma, dbs);
+        dbs->bh = aio_bh_new(blk_get_aio_context(dbs->blk),
+                             reschedule_dma, dbs);
         cpu_register_map_client(dbs->bh);
         return;
     }
 
-    if (!QEMU_IS_ALIGNED(dbs->iov.size, dbs->align)) {
-        qemu_iovec_discard_back(&dbs->iov,
-                                QEMU_ALIGN_DOWN(dbs->iov.size, dbs->align));
+    if (dbs->iov.size & ~BDRV_SECTOR_MASK) {
+        qemu_iovec_discard_back(&dbs->iov, dbs->iov.size & ~BDRV_SECTOR_MASK);
     }
 
-    aio_context_acquire(dbs->ctx);
-    dbs->acb = dbs->io_func(dbs->offset, &dbs->iov,
-                            dma_blk_cb, dbs, dbs->io_func_opaque);
-    aio_context_release(dbs->ctx);
+    dbs->acb = dbs->io_func(dbs->blk, dbs->sector_num, &dbs->iov,
+                            dbs->iov.size / 512, dma_blk_cb, dbs);
     assert(dbs->acb);
 }
 
@@ -189,39 +184,29 @@ static void dma_aio_cancel(BlockAIOCB *acb)
     }
 }
 
-static AioContext *dma_get_aio_context(BlockAIOCB *acb)
-{
-    DMAAIOCB *dbs = container_of(acb, DMAAIOCB, common);
-
-    return dbs->ctx;
-}
 
 static const AIOCBInfo dma_aiocb_info = {
     .aiocb_size         = sizeof(DMAAIOCB),
     .cancel_async       = dma_aio_cancel,
-    .get_aio_context    = dma_get_aio_context,
 };
 
-BlockAIOCB *dma_blk_io(AioContext *ctx,
-    QEMUSGList *sg, uint64_t offset, uint32_t align,
-    DMAIOFunc *io_func, void *io_func_opaque,
-    BlockCompletionFunc *cb,
+BlockAIOCB *dma_blk_io(
+    BlockBackend *blk, QEMUSGList *sg, uint64_t sector_num,
+    DMAIOFunc *io_func, BlockCompletionFunc *cb,
     void *opaque, DMADirection dir)
 {
-    DMAAIOCB *dbs = qemu_aio_get(&dma_aiocb_info, NULL, cb, opaque);
+    DMAAIOCB *dbs = blk_aio_get(&dma_aiocb_info, blk, cb, opaque);
 
-    trace_dma_blk_io(dbs, io_func_opaque, offset, (dir == DMA_DIRECTION_TO_DEVICE));
+    trace_dma_blk_io(dbs, blk, sector_num, (dir == DMA_DIRECTION_TO_DEVICE));
 
     dbs->acb = NULL;
+    dbs->blk = blk;
     dbs->sg = sg;
-    dbs->ctx = ctx;
-    dbs->offset = offset;
-    dbs->align = align;
+    dbs->sector_num = sector_num;
     dbs->sg_cur_index = 0;
     dbs->sg_cur_byte = 0;
     dbs->dir = dir;
     dbs->io_func = io_func;
-    dbs->io_func_opaque = io_func_opaque;
     dbs->bh = NULL;
     qemu_iovec_init(&dbs->iov, sg->nsg);
     dma_blk_cb(dbs, 0);
@@ -229,39 +214,19 @@ BlockAIOCB *dma_blk_io(AioContext *ctx,
 }
 
 
-static
-BlockAIOCB *dma_blk_read_io_func(int64_t offset, QEMUIOVector *iov,
-                                 BlockCompletionFunc *cb, void *cb_opaque,
-                                 void *opaque)
-{
-    BlockBackend *blk = opaque;
-    return blk_aio_preadv(blk, offset, iov, 0, cb, cb_opaque);
-}
-
 BlockAIOCB *dma_blk_read(BlockBackend *blk,
-                         QEMUSGList *sg, uint64_t offset, uint32_t align,
+                         QEMUSGList *sg, uint64_t sector,
                          void (*cb)(void *opaque, int ret), void *opaque)
 {
-    return dma_blk_io(blk_get_aio_context(blk), sg, offset, align,
-                      dma_blk_read_io_func, blk, cb, opaque,
+    return dma_blk_io(blk, sg, sector, blk_aio_readv, cb, opaque,
                       DMA_DIRECTION_FROM_DEVICE);
 }
 
-static
-BlockAIOCB *dma_blk_write_io_func(int64_t offset, QEMUIOVector *iov,
-                                  BlockCompletionFunc *cb, void *cb_opaque,
-                                  void *opaque)
-{
-    BlockBackend *blk = opaque;
-    return blk_aio_pwritev(blk, offset, iov, 0, cb, cb_opaque);
-}
-
 BlockAIOCB *dma_blk_write(BlockBackend *blk,
-                          QEMUSGList *sg, uint64_t offset, uint32_t align,
+                          QEMUSGList *sg, uint64_t sector,
                           void (*cb)(void *opaque, int ret), void *opaque)
 {
-    return dma_blk_io(blk_get_aio_context(blk), sg, offset, align,
-                      dma_blk_write_io_func, blk, cb, opaque,
+    return dma_blk_io(blk, sg, sector, blk_aio_writev, cb, opaque,
                       DMA_DIRECTION_TO_DEVICE);
 }
 

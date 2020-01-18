@@ -23,19 +23,23 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
+#include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+/*needed for MAP_POPULATE before including qemu-options.h */
+#include <sys/mman.h>
 #include <pwd.h>
 #include <grp.h>
 #include <libgen.h>
 
 /* Needed early for CONFIG_BSD etc. */
+#include "config-host.h"
 #include "sysemu/sysemu.h"
 #include "net/slirp.h"
 #include "qemu-options.h"
-#include "qemu/error-report.h"
-#include "qemu/log.h"
-#include "qemu/cutils.h"
+#include "qemu/rcu.h"
 
 #ifdef CONFIG_LINUX
 #include <sys/prctl.h>
@@ -87,7 +91,7 @@ char *os_find_datadir(void)
     if (exec_dir == NULL) {
         return NULL;
     }
-    dir = g_path_get_dirname(exec_dir);
+    dir = dirname(exec_dir);
 
     max_len = strlen(dir) +
         MAX(strlen(SHARE_SUFFIX), strlen(BUILD_SUFFIX)) + 1;
@@ -101,7 +105,6 @@ char *os_find_datadir(void)
         }
     }
 
-    g_free(dir);
     g_free(exec_dir);
     return res;
 }
@@ -136,8 +139,6 @@ void os_parse_cmd_args(int index, const char *optarg)
     switch (index) {
 #ifdef CONFIG_SLIRP
     case QEMU_OPTION_smb:
-        error_report("The -smb option is deprecated. "
-                     "Please use '-netdev user,smb=...' instead.");
         if (net_slirp_smb(optarg) < 0)
             exit(1);
         break;
@@ -247,6 +248,7 @@ void os_daemonize(void)
         signal(SIGTSTP, SIG_IGN);
         signal(SIGTTOU, SIG_IGN);
         signal(SIGTTIN, SIG_IGN);
+        rcu_after_fork();
     }
 }
 
@@ -274,10 +276,7 @@ void os_setup_post(void)
 
         dup2(fd, 0);
         dup2(fd, 1);
-        /* In case -D is given do not redirect stderr to /dev/null */
-        if (!qemu_logfile) {
-            dup2(fd, 2);
-        }
+        dup2(fd, 2);
 
         close(fd);
 

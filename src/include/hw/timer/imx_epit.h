@@ -31,7 +31,6 @@
 
 #include "hw/sysbus.h"
 #include "hw/ptimer.h"
-#include "hw/misc/imx_ccm.h"
 
 /*
  * EPIT: Enhanced periodic interrupt timer
@@ -64,8 +63,8 @@ typedef struct IMXEPITState{
     /*< public >*/
     ptimer_state *timer_reload;
     ptimer_state *timer_cmp;
-    MemoryRegion  iomem;
-    IMXCCMState  *ccm;
+    MemoryRegion iomem;
+    DeviceState *ccm;
 
     uint32_t cr;
     uint32_t sr;

@@ -209,10 +209,10 @@ static int ocsp_request ( struct ocsp_check *ocsp ) {
 static int ocsp_uri_string ( struct ocsp_check *ocsp ) {
 	struct x509_ocsp_responder *responder =
 		&ocsp->cert->extensions.auth_info.ocsp;
-	char *base64;
-	char *sep;
-	size_t base64_len;
-	size_t uri_len;
+	struct uri path_uri;
+	char *path_base64_string;
+	char *path_uri_string;
+	size_t path_len;
 	size_t len;
 	int rc;
 
@@ -224,44 +224,46 @@ static int ocsp_uri_string ( struct ocsp_check *ocsp ) {
 		goto err_no_uri;
 	}
 
-	/* Calculate base64-encoded request length */
-	base64_len = ( base64_encoded_len ( ocsp->request.builder.len )
-		       + 1 /* NUL */ );
-
-	/* Allocate and construct the base64-encoded request */
-	base64 = malloc ( base64_len );
-	if ( ! base64 ) {
+	/* Base64-encode the request as the URI path */
+	path_len = ( base64_encoded_len ( ocsp->request.builder.len )
+		     + 1 /* NUL */ );
+	path_base64_string = malloc ( path_len );
+	if ( ! path_base64_string ) {
 		rc = -ENOMEM;
-		goto err_alloc_base64;
+		goto err_path_base64;
 	}
 	base64_encode ( ocsp->request.builder.data, ocsp->request.builder.len,
-			base64, base64_len );
+			path_base64_string, path_len );
 
-	/* Calculate URI-encoded base64-encoded request length */
-	uri_len = ( uri_encode ( URI_PATH, base64, ( base64_len - 1 /* NUL */ ),
-				 NULL, 0 ) + 1 /* NUL */ );
+	/* URI-encode the Base64-encoded request */
+	memset ( &path_uri, 0, sizeof ( path_uri ) );
+	path_uri.path = path_base64_string;
+	path_uri_string = format_uri_alloc ( &path_uri );
+	if ( ! path_uri_string ) {
+		rc = -ENOMEM;
+		goto err_path_uri;
+	}
 
-	/* Allocate and construct the URI string */
-	len = ( responder->uri.len + 1 /* possible "/" */ + uri_len );
+	/* Construct URI string */
+	len = ( responder->uri.len + strlen ( path_uri_string ) + 1 /* NUL */ );
 	ocsp->uri_string = zalloc ( len );
 	if ( ! ocsp->uri_string ) {
 		rc = -ENOMEM;
-		goto err_alloc_uri;
+		goto err_ocsp_uri;
 	}
 	memcpy ( ocsp->uri_string, responder->uri.data, responder->uri.len );
-	sep = &ocsp->uri_string[ responder->uri.len - 1 ];
-	if ( *sep != '/' )
-		*(++sep) = '/';
-	uri_encode ( URI_PATH, base64, base64_len, ( sep + 1 ), uri_len );
+	strcpy ( &ocsp->uri_string[responder->uri.len], path_uri_string );
 	DBGC2 ( ocsp, "OCSP %p \"%s\" URI is %s\n",
 		ocsp, x509_name ( ocsp->cert ), ocsp->uri_string );
 
 	/* Success */
 	rc = 0;
 
- err_alloc_uri:
-	free ( base64 );
- err_alloc_base64:
+ err_ocsp_uri:
+	free ( path_uri_string );
+ err_path_uri:
+	free ( path_base64_string );
+ err_path_base64:
  err_no_uri:
 	return rc;
 }
@@ -282,7 +284,7 @@ int ocsp_check ( struct x509_certificate *cert,
 	/* Sanity checks */
 	assert ( cert != NULL );
 	assert ( issuer != NULL );
-	assert ( x509_is_valid ( issuer ) );
+	assert ( issuer->valid );
 
 	/* Allocate and initialise check */
 	*ocsp = zalloc ( sizeof ( **ocsp ) );

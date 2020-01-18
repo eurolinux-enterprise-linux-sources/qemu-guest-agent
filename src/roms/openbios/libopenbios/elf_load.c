@@ -11,7 +11,6 @@
 #include "libopenbios/sys_info.h"
 #include "libopenbios/ipchecksum.h"
 #include "libopenbios/bindings.h"
-#include "libopenbios/initprogram.h"
 #include "libopenbios/ofmem.h"
 #define printf printk
 #define debug printk
@@ -442,11 +441,9 @@ elf_load(struct sys_info *info, ihandle_t dev, const char *cmdline, void **boot_
        ELF */
     if (boot_notes) {
         *boot_notes = (void *)virt_to_phys(build_boot_notes(info, cmdline));
-        feval("elf-boot load-state >ls.file-type !");
-        PUSH((ucell)*boot_notes);
-        feval("elf-boot load-state >ls.param !");
+        feval("elf-boot saved-program-state >sps.file-type !");
     } else {
-        feval("elf load-state >ls.file-type !");
+        feval("elf saved-program-state >sps.file-type !");
     }
 
     //debug("current time: %lu\n", currticks());
@@ -454,10 +451,13 @@ elf_load(struct sys_info *info, ihandle_t dev, const char *cmdline, void **boot_
     debug("entry point is " FMT_elf "\n", addr_fixup(ehdr.e_entry));
 
     // Initialise saved-program-state
+    PUSH(addr_fixup(ehdr.e_entry));
+    feval("saved-program-state >sps.entry !");
     PUSH(file_size);
-    feval("load-state >ls.file-size !");
-    feval("elf load-state >ls.file-type !");
-    
+    feval("saved-program-state >sps.file-size !");
+
+    feval("-1 state-valid !");
+
 out:
     close_io(fd);
     if (phdr)
@@ -481,6 +481,7 @@ elf_init_program(void)
 	uintptr_t tmp;
 
 	/* TODO: manage ELF notes section */
+	feval("0 state-valid !");
 	feval("load-base");
 	base = (char*)cell2pointer(POP());
 
@@ -525,11 +526,12 @@ elf_init_program(void)
 #endif
 	}
 
-	// Initialise load-state
+	// Initialise saved-program-state
 	PUSH(ehdr->e_entry);
-	feval("load-state >ls.entry !");
-	
-	arch_init_program();
-	
+	feval("saved-program-state >sps.entry !");
+	PUSH(total_size);
+	feval("saved-program-state >sps.file-size !");
+	feval("elf saved-program-state >sps.file-type !");
+
 	feval("-1 state-valid !");
 }

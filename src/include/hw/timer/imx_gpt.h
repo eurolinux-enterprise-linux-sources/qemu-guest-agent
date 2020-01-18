@@ -31,7 +31,6 @@
 
 #include "hw/sysbus.h"
 #include "hw/ptimer.h"
-#include "hw/misc/imx_ccm.h"
 
 /*
  * GPT : General purpose timer
@@ -74,13 +73,7 @@
 #define GPT_IR_OF3IE  (1 << 2)
 #define GPT_IR_ROVIE  (1 << 5)
 
-#define TYPE_IMX25_GPT "imx25.gpt"
-#define TYPE_IMX31_GPT "imx31.gpt"
-#define TYPE_IMX6_GPT "imx6.gpt"
-#define TYPE_IMX7_GPT "imx7.gpt"
-
-#define TYPE_IMX_GPT TYPE_IMX25_GPT
-
+#define TYPE_IMX_GPT "imx.gpt"
 #define IMX_GPT(obj) OBJECT_CHECK(IMXGPTState, (obj), TYPE_IMX_GPT)
 
 typedef struct IMXGPTState{
@@ -89,8 +82,8 @@ typedef struct IMXGPTState{
 
     /*< public >*/
     ptimer_state *timer;
-    MemoryRegion  iomem;
-    IMXCCMState  *ccm;
+    MemoryRegion iomem;
+    DeviceState *ccm;
 
     uint32_t cr;
     uint32_t pr;
@@ -109,8 +102,6 @@ typedef struct IMXGPTState{
     uint32_t freq;
 
     qemu_irq irq;
-
-    const IMXClk *clocks;
 } IMXGPTState;
 
 #endif /* IMX_GPT_H */

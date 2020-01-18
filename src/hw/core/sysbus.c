@@ -17,7 +17,6 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "monitor/monitor.h"
 #include "exec/address-spaces.h"
@@ -190,9 +189,9 @@ MemoryRegion *sysbus_mmio_get_region(SysBusDevice *dev, int n)
     return dev->mmio[n].memory;
 }
 
-void sysbus_init_ioports(SysBusDevice *dev, uint32_t ioport, uint32_t size)
+void sysbus_init_ioports(SysBusDevice *dev, pio_addr_t ioport, pio_addr_t size)
 {
-    uint32_t i;
+    pio_addr_t i;
 
     for (i = 0; i < size; i++) {
         assert(dev->num_pio < QDEV_MAX_PIO);
@@ -326,17 +325,6 @@ static void sysbus_device_class_init(ObjectClass *klass, void *data)
     DeviceClass *k = DEVICE_CLASS(klass);
     k->init = sysbus_device_init;
     k->bus_type = TYPE_SYSTEM_BUS;
-    /*
-     * device_add plugs devices into a suitable bus.  For "real" buses,
-     * that actually connects the device.  For sysbus, the connections
-     * need to be made separately, and device_add can't do that.  The
-     * device would be left unconnected, and will probably not work
-     *
-     * However, a few machines can handle device_add/-device with
-     * a few specific sysbus devices. In those cases, the device
-     * subclass needs to override it and set user_creatable=true.
-     */
-    k->user_creatable = false;
 }
 
 static const TypeInfo sysbus_device_type_info = {

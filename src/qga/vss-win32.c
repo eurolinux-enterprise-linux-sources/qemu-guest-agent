@@ -10,10 +10,8 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
 #include <windows.h>
-#include "qapi/error.h"
-#include "qemu/error-report.h"
 #include "qga/guest-agent-core.h"
 #include "qga/vss-win32.h"
 #include "qga/vss-win32/requester.h"
@@ -63,7 +61,7 @@ static bool vss_check_os_version(void)
             return false;
         }
         if (wow64) {
-            warn_report("Running under WOW64");
+            fprintf(stderr, "Warning: Running under WOW64\n");
         }
 #endif
         return !wow64;
@@ -147,12 +145,12 @@ void ga_uninstall_vss_provider(void)
 }
 
 /* Call VSS requester and freeze/thaw filesystems and applications */
-void qga_vss_fsfreeze(int *nr_volume, bool freeze, Error **errp)
+void qga_vss_fsfreeze(int *nr_volume, Error **errp, bool freeze)
 {
     const char *func_name = freeze ? "requester_freeze" : "requester_thaw";
     QGAVSSRequesterFunc func;
     ErrorSet errset = {
-        .error_setg_win32_wrapper = error_setg_win32_internal,
+        .error_setg_win32 = error_setg_win32_internal,
         .errp = errp,
     };
 

@@ -1,10 +1,5 @@
-#include "qemu/osdep.h"
-#include "qemu/error-report.h"
-#include "qapi/error.h"
-#include "qemu-common.h"
-#include "cpu.h"
 #include "hw/qdev.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 #include "hw/ppc/spapr.h"
 #include "hw/ppc/spapr_vio.h"
 
@@ -12,7 +7,7 @@
 
 typedef struct VIOsPAPRVTYDevice {
     VIOsPAPRDevice sdev;
-    CharBackend chardev;
+    CharDriverState *chardev;
     uint32_t in, out;
     uint8_t buf[VTERM_BUFSIZE];
 } VIOsPAPRVTYDevice;
@@ -25,7 +20,7 @@ static int vty_can_receive(void *opaque)
 {
     VIOsPAPRVTYDevice *dev = VIO_SPAPR_VTY_DEVICE(opaque);
 
-    return VTERM_BUFSIZE - (dev->in - dev->out);
+    return (dev->in - dev->out) < VTERM_BUFSIZE;
 }
 
 static void vty_receive(void *opaque, const uint8_t *buf, int size)
@@ -38,15 +33,7 @@ static void vty_receive(void *opaque, const uint8_t *buf, int size)
         qemu_irq_pulse(spapr_vio_qirq(&dev->sdev));
     }
     for (i = 0; i < size; i++) {
-        if (dev->in - dev->out >= VTERM_BUFSIZE) {
-            static bool reported;
-            if (!reported) {
-                error_report("VTY input buffer exhausted - characters dropped."
-                             " (input size = %i)", size);
-                reported = true;
-            }
-            break;
-        }
+        assert((dev->in - dev->out) < VTERM_BUFSIZE);
         dev->buf[dev->in++ % VTERM_BUFSIZE] = buf[i];
     }
 }
@@ -58,27 +45,9 @@ static int vty_getchars(VIOsPAPRDevice *sdev, uint8_t *buf, int max)
 
     while ((n < max) && (dev->out != dev->in)) {
         buf[n++] = dev->buf[dev->out++ % VTERM_BUFSIZE];
-
-        /* PowerVM's vty implementation has a bug where it inserts a
-         * \0 after every \r going to the guest.  Existing guests have
-         * a workaround for this which removes every \0 immediately
-         * following a \r, so here we make ourselves bug-for-bug
-         * compatible, so that the guest won't drop a real \0-after-\r
-         * that happens to occur in a binary stream. */
-        if (buf[n - 1] == '\r') {
-            if (n < max) {
-                buf[n++] = '\0';
-            } else {
-                /* No room for the extra \0, roll back and try again
-                 * next time */
-                dev->out--;
-                n--;
-                break;
-            }
-        }
     }
 
-    qemu_chr_fe_accept_input(&dev->chardev);
+    qemu_chr_accept_input(dev->chardev);
 
     return n;
 }
@@ -87,22 +56,21 @@ void vty_putchars(VIOsPAPRDevice *sdev, uint8_t *buf, int len)
 {
     VIOsPAPRVTYDevice *dev = VIO_SPAPR_VTY_DEVICE(sdev);
 
-    /* XXX this blocks entire thread. Rewrite to use
-     * qemu_chr_fe_write and background I/O callbacks */
-    qemu_chr_fe_write_all(&dev->chardev, buf, len);
+    /* FIXME: should check the qemu_chr_fe_write() return value */
+    qemu_chr_fe_write(dev->chardev, buf, len);
 }
 
 static void spapr_vty_realize(VIOsPAPRDevice *sdev, Error **errp)
 {
     VIOsPAPRVTYDevice *dev = VIO_SPAPR_VTY_DEVICE(sdev);
 
-    if (!qemu_chr_fe_backend_connected(&dev->chardev)) {
+    if (!dev->chardev) {
         error_setg(errp, "chardev property not set");
         return;
     }
 
-    qemu_chr_fe_set_handlers(&dev->chardev, vty_can_receive,
-                             vty_receive, NULL, NULL, dev, NULL, true);
+    qemu_chr_add_handlers(dev->chardev, vty_can_receive,
+                          vty_receive, NULL, dev);
 }
 
 /* Forward declaration */
@@ -159,7 +127,7 @@ static target_ulong h_get_term_char(PowerPCCPU *cpu, sPAPRMachineState *spapr,
     return H_SUCCESS;
 }
 
-void spapr_vty_create(VIOsPAPRBus *bus, Chardev *chardev)
+void spapr_vty_create(VIOsPAPRBus *bus, CharDriverState *chardev)
 {
     DeviceState *dev;
 

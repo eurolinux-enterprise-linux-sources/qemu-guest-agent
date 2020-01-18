@@ -20,7 +20,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/mips/cpudevs.h"
 #include "cpu.h"
@@ -58,9 +57,8 @@ static void cpu_mips_irq_request(void *opaque, int irq, int level)
     }
 }
 
-void cpu_mips_irq_init_cpu(MIPSCPU *cpu)
+void cpu_mips_irq_init_cpu(CPUMIPSState *env)
 {
-    CPUMIPSState *env = &cpu->env;
     qemu_irq *qi;
     int i;
 

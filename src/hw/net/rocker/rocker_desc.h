@@ -14,8 +14,9 @@
  * GNU General Public License for more details.
  */
 
-#ifndef ROCKER_DESC_H
-#define ROCKER_DESC_H
+
+#ifndef _ROCKER_DESC_H_
+#define _ROCKER_DESC_H_
 
 #include "rocker_hw.h"
 

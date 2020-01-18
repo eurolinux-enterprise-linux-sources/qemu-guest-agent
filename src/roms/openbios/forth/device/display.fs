@@ -229,8 +229,8 @@ defer fb8-invertrect
   d# 15 to background-color
 
   \ override with OpenBIOS defaults
-  0 to background-color
-  ff to foreground-color
+  fe to background-color
+  0 to foreground-color
   ;
 
 : fb8-toggle-cursor ( -- )
@@ -386,16 +386,15 @@ defer fb8-invertrect
   to foreground-color to background-color
 
   \ setup palette
-  10101 ['] color-palette cell+ 100 0 do
+  10101 ['] color-palette cell+ ff 0 do
     dup 2 pick i * swap ! cell+
   loop 2drop
 
-  \ special foreground and background colors
-  ffffcc ['] color-palette cell+ 0 cells + !
-  000000 ['] color-palette cell+ ff cells + !
+  \ special background color
+  ffffcc ['] color-palette cell+ fe cells + !
 
   \ load palette onto the hardware
-  ['] color-palette cell+ 100 0 do
+  ['] color-palette cell+ ff 0 do
     dup @ ff0000 and d# 16 rshift
     1 pick @ ff00 and d# 8 rshift
     2 pick @ ff and
@@ -409,8 +408,8 @@ defer fb8-invertrect
   loop drop
 
   \ ... but let's override with some better defaults
-  0 to background-color
-  ff to foreground-color
+  fe to background-color
+  0 to foreground-color
 
   fb8-erase-screen
 

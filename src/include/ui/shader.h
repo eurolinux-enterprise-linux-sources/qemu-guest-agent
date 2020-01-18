@@ -3,11 +3,13 @@
 
 #include <epoxy/gl.h>
 
-typedef struct QemuGLShader QemuGLShader;
+GLuint qemu_gl_init_texture_blit(GLint texture_blit_prog);
+void qemu_gl_run_texture_blit(GLint texture_blit_prog,
+                              GLint texture_blit_vao);
 
-void qemu_gl_run_texture_blit(QemuGLShader *gls, bool flip);
-
-QemuGLShader *qemu_gl_init_shader(void);
-void qemu_gl_fini_shader(QemuGLShader *gls);
+GLuint qemu_gl_create_compile_shader(GLenum type, const GLchar *src);
+GLuint qemu_gl_create_link_program(GLuint vert, GLuint frag);
+GLuint qemu_gl_create_compile_link_program(const GLchar *vert_src,
+                                           const GLchar *frag_src);
 
 #endif /* QEMU_SHADER_H */

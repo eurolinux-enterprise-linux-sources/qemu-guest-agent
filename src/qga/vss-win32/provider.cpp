@@ -10,10 +10,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
 #include "vss-common.h"
-#include <inc/win2003/vscoordint.h>
-#include <inc/win2003/vsprov.h>
+#include "inc/win2003/vscoordint.h"
+#include "inc/win2003/vsprov.h"
 
 #define VSS_TIMEOUT_MSEC (60*1000)
 
@@ -377,6 +377,7 @@ STDMETHODIMP CQGAVssProvider::CommitSnapshots(VSS_ID SnapshotSetId)
     if (WaitForSingleObject(hEventThaw, VSS_TIMEOUT_MSEC) != WAIT_OBJECT_0) {
         /* Send event to qemu-ga to notify the provider is timed out */
         SetEvent(hEventTimeout);
+        hr = E_ABORT;
     }
 
     CloseHandle(hEventThaw);

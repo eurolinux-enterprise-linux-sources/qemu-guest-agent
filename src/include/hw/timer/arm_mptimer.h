@@ -27,9 +27,12 @@
 
 /* State of a single timer or watchdog block */
 typedef struct {
+    uint32_t count;
+    uint32_t load;
     uint32_t control;
     uint32_t status;
-    struct ptimer_state *timer;
+    int64_t tick;
+    QEMUTimer *timer;
     qemu_irq irq;
     MemoryRegion iomem;
 } TimerBlock;

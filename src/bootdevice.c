@@ -22,13 +22,10 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "sysemu/sysemu.h"
 #include "qapi/visitor.h"
 #include "qemu/error-report.h"
-#include "sysemu/reset.h"
-#include "hw/qdev-core.h"
+#include "hw/hw.h"
 
 typedef struct FWBootEntry FWBootEntry;
 
@@ -273,21 +270,21 @@ typedef struct {
     DeviceState *dev;
 } BootIndexProperty;
 
-static void device_get_bootindex(Object *obj, Visitor *v, const char *name,
-                                 void *opaque, Error **errp)
+static void device_get_bootindex(Object *obj, Visitor *v, void *opaque,
+                                 const char *name, Error **errp)
 {
     BootIndexProperty *prop = opaque;
-    visit_type_int32(v, name, prop->bootindex, errp);
+    visit_type_int32(v, prop->bootindex, name, errp);
 }
 
-static void device_set_bootindex(Object *obj, Visitor *v, const char *name,
-                                 void *opaque, Error **errp)
+static void device_set_bootindex(Object *obj, Visitor *v, void *opaque,
+                                 const char *name, Error **errp)
 {
     BootIndexProperty *prop = opaque;
     int32_t boot_index;
     Error *local_err = NULL;
 
-    visit_type_int32(v, name, &boot_index, &local_err);
+    visit_type_int32(v, &boot_index, name, &local_err);
     if (local_err) {
         goto out;
     }
@@ -302,7 +299,9 @@ static void device_set_bootindex(Object *obj, Visitor *v, const char *name,
     add_boot_device_path(*prop->bootindex, prop->dev, prop->suffix);
 
 out:
-    error_propagate(errp, local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+    }
 }
 
 static void property_release_bootindex(Object *obj, const char *name,

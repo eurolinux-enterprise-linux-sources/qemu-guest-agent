@@ -18,12 +18,20 @@
  *
  */
 
-#ifndef QCRYPTO_HASH_H
-#define QCRYPTO_HASH_H
+#ifndef QCRYPTO_HASH_H__
+#define QCRYPTO_HASH_H__
 
-#include "qapi/qapi-types-crypto.h"
+#include "qemu-common.h"
+#include "qapi/error.h"
 
-/* See also "QCryptoHashAlgorithm" defined in qapi/crypto.json */
+typedef enum {
+    QCRYPTO_HASH_ALG_MD5,
+    QCRYPTO_HASH_ALG_SHA1,
+    QCRYPTO_HASH_ALG_SHA256,
+
+    QCRYPTO_HASH_ALG_LAST
+} QCryptoHashAlgorithm;
+
 
 /**
  * qcrypto_hash_supports:
@@ -36,17 +44,6 @@
  */
 gboolean qcrypto_hash_supports(QCryptoHashAlgorithm alg);
 
-
-/**
- * qcrypto_hash_digest_len:
- * @alg: the hash algorithm
- *
- * Determine the size of the hash digest in bytes
- *
- * Returns: the digest length in bytes
- */
-size_t qcrypto_hash_digest_len(QCryptoHashAlgorithm alg);
-
 /**
  * qcrypto_hash_bytesv:
  * @alg: the hash algorithm
@@ -54,7 +51,7 @@ size_t qcrypto_hash_digest_len(QCryptoHashAlgorithm alg);
  * @niov: the length of @iov
  * @result: pointer to hold output hash
  * @resultlen: pointer to hold length of @result
- * @errp: pointer to a NULL-initialized error object
+ * @errp: pointer to uninitialized error object
  *
  * Computes the hash across all the memory regions
  * present in @iov. The @result pointer will be
@@ -79,7 +76,7 @@ int qcrypto_hash_bytesv(QCryptoHashAlgorithm alg,
  * @len: the length of @buf
  * @result: pointer to hold output hash
  * @resultlen: pointer to hold length of @result
- * @errp: pointer to a NULL-initialized error object
+ * @errp: pointer to uninitialized error object
  *
  * Computes the hash across all the memory region
  * @buf of length @len. The @result pointer will be
@@ -103,7 +100,7 @@ int qcrypto_hash_bytes(QCryptoHashAlgorithm alg,
  * @iov: the array of memory regions to hash
  * @niov: the length of @iov
  * @digest: pointer to hold output hash
- * @errp: pointer to a NULL-initialized error object
+ * @errp: pointer to uninitialized error object
  *
  * Computes the hash across all the memory regions
  * present in @iov. The @digest pointer will be
@@ -126,7 +123,7 @@ int qcrypto_hash_digestv(QCryptoHashAlgorithm alg,
  * @buf: the memory region to hash
  * @len: the length of @buf
  * @digest: pointer to hold output hash
- * @errp: pointer to a NULL-initialized error object
+ * @errp: pointer to uninitialized error object
  *
  * Computes the hash across all the memory region
  * @buf of length @len. The @digest pointer will be
@@ -149,7 +146,7 @@ int qcrypto_hash_digest(QCryptoHashAlgorithm alg,
  * @iov: the array of memory regions to hash
  * @niov: the length of @iov
  * @base64: pointer to hold output hash
- * @errp: pointer to a NULL-initialized error object
+ * @errp: pointer to uninitialized error object
  *
  * Computes the hash across all the memory regions
  * present in @iov. The @base64 pointer will be
@@ -172,7 +169,7 @@ int qcrypto_hash_base64v(QCryptoHashAlgorithm alg,
  * @buf: the memory region to hash
  * @len: the length of @buf
  * @base64: pointer to hold output hash
- * @errp: pointer to a NULL-initialized error object
+ * @errp: pointer to uninitialized error object
  *
  * Computes the hash across all the memory region
  * @buf of length @len. The @base64 pointer will be
@@ -189,4 +186,4 @@ int qcrypto_hash_base64(QCryptoHashAlgorithm alg,
                         char **base64,
                         Error **errp);
 
-#endif /* QCRYPTO_HASH_H */
+#endif /* QCRYPTO_HASH_H__ */

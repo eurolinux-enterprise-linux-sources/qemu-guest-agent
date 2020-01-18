@@ -15,8 +15,6 @@ __email__      = "stefanha@linux.vnet.ibm.com"
 
 import sys
 import getopt
-import os.path
-import re
 
 from tracetool import error_write, out
 import tracetool.backend
@@ -49,7 +47,6 @@ Options:
     --binary <path>          Full path to QEMU binary.
     --target-type <type>     QEMU emulator target type ('system' or 'user').
     --target-name <name>     QEMU emulator target name.
-    --group <name>           Name of the event group
     --probe-prefix <prefix>  Prefix for dtrace probe names
                              (default: qemu-<target-type>-<target-name>).\
 """ % {
@@ -63,23 +60,23 @@ Options:
     else:
         sys.exit(1)
 
+
 def main(args):
     global _SCRIPT
     _SCRIPT = args[0]
 
     long_opts = ["backends=", "format=", "help", "list-backends",
-                 "check-backends", "group="]
+                 "check-backends"]
     long_opts += ["binary=", "target-type=", "target-name=", "probe-prefix="]
 
     try:
         opts, args = getopt.getopt(args[1:], "", long_opts)
-    except getopt.GetoptError as err:
+    except getopt.GetoptError, err:
         error_opt(str(err))
 
     check_backends = False
     arg_backends = []
     arg_format = ""
-    arg_group = None
     binary = None
     target_type = None
     target_name = None
@@ -90,8 +87,6 @@ def main(args):
 
         elif opt == "--backends":
             arg_backends = arg.split(",")
-        elif opt == "--group":
-            arg_group = arg
         elif opt == "--format":
             arg_format = arg
 
@@ -123,9 +118,6 @@ def main(args):
                 sys.exit(1)
         sys.exit(0)
 
-    if arg_group is None:
-        error_opt("group name is required")
-
     if arg_format == "stap":
         if binary is None:
             error_opt("--binary is required for SystemTAP tapset generator")
@@ -137,17 +129,10 @@ def main(args):
         if probe_prefix is None:
             probe_prefix = ".".join(["qemu", target_type, target_name])
 
-    if len(args) < 1:
-        error_opt("missing trace-events filepath")
-    events = []
-    for arg in args:
-        with open(arg, "r") as fh:
-            events.extend(tracetool.read_events(fh, arg))
-
     try:
-        tracetool.generate(events, arg_group, arg_format, arg_backends,
+        tracetool.generate(sys.stdin, arg_format, arg_backends,
                            binary=binary, probe_prefix=probe_prefix)
-    except tracetool.TracetoolError as e:
+    except tracetool.TracetoolError, e:
         error_opt(str(e))
 
 if __name__ == "__main__":

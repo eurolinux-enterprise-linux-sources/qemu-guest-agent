@@ -227,7 +227,7 @@ def main():
     qed = QED(open(filename, 'r+b'))
     try:
         globals()[cmd](qed, *sys.argv[3:])
-    except TypeError as e:
+    except TypeError, e:
         sys.stderr.write(globals()[cmd].__doc__ + '\n')
         sys.exit(1)
 

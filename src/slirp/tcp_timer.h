@@ -30,8 +30,8 @@
  * tcp_timer.h,v 1.4 1994/08/21 05:27:38 paul Exp
  */
 
-#ifndef TCP_TIMER_H
-#define TCP_TIMER_H
+#ifndef _TCP_TIMER_H_
+#define _TCP_TIMER_H_
 
 /*
  * Definitions of the TCP timers.  These timers are counted

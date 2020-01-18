@@ -22,12 +22,10 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "tap_int.h"
 #include "sysemu/sysemu.h"
-#include "qemu/cutils.h"
 
+#include <sys/stat.h>
 #include <sys/ethernet.h>
 #include <sys/sockio.h>
 #include <netinet/arp.h>

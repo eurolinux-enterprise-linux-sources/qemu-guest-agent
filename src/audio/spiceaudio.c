@@ -17,9 +17,7 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "qemu/host-utils.h"
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
 #include "ui/qemu-spice.h"
@@ -105,11 +103,11 @@ static int rate_get_samples (struct audio_pcm_info *info, SpiceRateCtl *rate)
 
     now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     ticks = now - rate->start_ticks;
-    bytes = muldiv64(ticks, info->bytes_per_second, NANOSECONDS_PER_SECOND);
+    bytes = muldiv64 (ticks, info->bytes_per_second, get_ticks_per_sec ());
     samples = (bytes - rate->bytes_sent) >> info->shift;
     if (samples < 0 || samples > 65536) {
         error_report("Resetting rate control (%" PRId64 " samples)", samples);
-        rate_start(rate);
+        rate_start (rate);
         samples = 0;
     }
     rate->bytes_sent += samples << info->shift;
@@ -391,7 +389,7 @@ static struct audio_pcm_ops audio_callbacks = {
     .ctl_in   = line_in_ctl,
 };
 
-static struct audio_driver spice_audio_driver = {
+struct audio_driver spice_audio_driver = {
     .name           = "spice",
     .descr          = "spice audio driver",
     .options        = audio_options,
@@ -411,9 +409,3 @@ void qemu_spice_audio_init (void)
 {
     spice_audio_driver.can_be_default = 1;
 }
-
-static void register_audio_spice(void)
-{
-    audio_driver_register(&spice_audio_driver);
-}
-type_init(register_audio_spice);

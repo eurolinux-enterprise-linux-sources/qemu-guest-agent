@@ -11,7 +11,7 @@
 \ ****************************************************************************/
 
 : slof-build-id  ( -- str len )
-   flash-header 10 + dup from-cstring a min
+   flash-header 10 + a
 ;
 
 : slof-revision s" 001" ;
@@ -25,6 +25,12 @@
    here 10
    s" , " $cat
    bdate2human $cat encode-string THEN
+;
+
+\ Fetch C string
+: from-cstring ( addr - len )  
+  dup dup BEGIN c@ 0 <> WHILE 1 + dup REPEAT
+  swap -
 ;
 
 : invert-region-cs ( addr len cellsize -- )

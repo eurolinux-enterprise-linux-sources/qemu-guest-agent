@@ -14,6 +14,8 @@
 #ifndef QMP_EVENT_H
 #define QMP_EVENT_H
 
+#include "qapi/error.h"
+#include "qapi/qmp/qdict.h"
 
 typedef void (*QMPEventFuncEmit)(unsigned event, QDict *dict, Error **errp);
 

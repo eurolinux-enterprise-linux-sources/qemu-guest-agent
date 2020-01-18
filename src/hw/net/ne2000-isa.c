@@ -21,16 +21,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
+#include "hw/hw.h"
+#include "hw/i386/pc.h"
 #include "hw/isa/isa.h"
-#include "hw/net/ne2000-isa.h"
 #include "hw/qdev.h"
+#include "net/net.h"
 #include "ne2000.h"
-#include "sysemu/sysemu.h"
 #include "exec/address-spaces.h"
-#include "qapi/error.h"
 #include "qapi/visitor.h"
 
+#define TYPE_ISA_NE2000 "ne2k_isa"
 #define ISA_NE2000(obj) OBJECT_CHECK(ISANE2000State, (obj), TYPE_ISA_NE2000)
 
 typedef struct ISANE2000State {
@@ -42,7 +42,7 @@ typedef struct ISANE2000State {
 } ISANE2000State;
 
 static NetClientInfo net_ne2000_isa_info = {
-    .type = NET_CLIENT_DRIVER_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .receive = ne2000_receive,
 };
@@ -93,26 +93,24 @@ static void isa_ne2000_class_initfn(ObjectClass *klass, void *data)
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
 }
 
-static void isa_ne2000_get_bootindex(Object *obj, Visitor *v,
-                                     const char *name, void *opaque,
-                                     Error **errp)
+static void isa_ne2000_get_bootindex(Object *obj, Visitor *v, void *opaque,
+                                     const char *name, Error **errp)
 {
     ISANE2000State *isa = ISA_NE2000(obj);
     NE2000State *s = &isa->ne2000;
 
-    visit_type_int32(v, name, &s->c.bootindex, errp);
+    visit_type_int32(v, &s->c.bootindex, name, errp);
 }
 
-static void isa_ne2000_set_bootindex(Object *obj, Visitor *v,
-                                     const char *name, void *opaque,
-                                     Error **errp)
+static void isa_ne2000_set_bootindex(Object *obj, Visitor *v, void *opaque,
+                                     const char *name, Error **errp)
 {
     ISANE2000State *isa = ISA_NE2000(obj);
     NE2000State *s = &isa->ne2000;
     int32_t boot_index;
     Error *local_err = NULL;
 
-    visit_type_int32(v, name, &boot_index, &local_err);
+    visit_type_int32(v, &boot_index, name, &local_err);
     if (local_err) {
         goto out;
     }
@@ -125,7 +123,9 @@ static void isa_ne2000_set_bootindex(Object *obj, Visitor *v,
     s->c.bootindex = boot_index;
 
 out:
-    error_propagate(errp, local_err);
+    if (local_err) {
+        error_propagate(errp, local_err);
+    }
 }
 
 static void isa_ne2000_instance_init(Object *obj)

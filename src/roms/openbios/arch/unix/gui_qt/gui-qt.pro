@@ -1,6 +1,6 @@
 # tag: qmake project file for OpenBIOS QT user interface
 #
-# Copyright (C) 2003-2004 Stefan Reinauer
+# Copyright (C) 2003-2004 Stefan Reinauer <stepan@openbios.org>
 #
 # See the file "COPYING" for further information about
 # the copyright and warranty status of this work.

@@ -1,30 +1,23 @@
-#ifndef LIBQOS_H
-#define LIBQOS_H
+#ifndef __libqos_h
+#define __libqos_h
 
 #include "libqtest.h"
 #include "libqos/pci.h"
 #include "libqos/malloc-pc.h"
 
-typedef struct QOSState QOSState;
-
 typedef struct QOSOps {
-    QGuestAllocator *(*init_allocator)(QTestState *qts, QAllocOpts);
+    QGuestAllocator *(*init_allocator)(QAllocOpts);
     void (*uninit_allocator)(QGuestAllocator *);
-    QPCIBus *(*qpci_init)(QTestState *qts, QGuestAllocator *alloc);
-    void (*qpci_free)(QPCIBus *bus);
-    void (*shutdown)(QOSState *);
 } QOSOps;
 
-struct QOSState {
+typedef struct QOSState {
     QTestState *qts;
     QGuestAllocator *alloc;
-    QPCIBus *pcibus;
     QOSOps *ops;
-};
+} QOSState;
 
 QOSState *qtest_vboot(QOSOps *ops, const char *cmdline_fmt, va_list ap);
 QOSState *qtest_boot(QOSOps *ops, const char *cmdline_fmt, ...);
-void qtest_common_shutdown(QOSState *qs);
 void qtest_shutdown(QOSState *qs);
 bool have_qemu_img(void);
 void mkimg(const char *file, const char *fmt, unsigned size_mb);

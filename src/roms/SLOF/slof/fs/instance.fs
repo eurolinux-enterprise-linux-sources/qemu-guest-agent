@@ -129,9 +129,13 @@ CONSTANT <instancevariable>
 
 \ copy args from original instance to new created
 : set-my-args   ( old-addr len -- )
-   dup alloc-mem                   \ allocate space for new args ( old-addr len new-addr )
-   2dup my-self instance>args 2!   \ write into instance struct  ( old-addr len new-addr )
-   swap move                       \ and copy the args           ( )
+   dup IF                             \ IF len > 0                    ( old-addr len )
+      dup alloc-mem                   \ | allocate space for new args ( old-addr len new-addr )
+      2dup my-self instance>args 2!   \ | write into instance struct  ( old-addr len new-addr )
+      swap move                       \ | and copy the args           ( )
+   ELSE                               \ ELSE                          ( old-addr len )
+      my-self instance>args 2!        \ | set new args to zero, too   ( )
+   THEN                               \ FI
 ;
 
 \ Current node has already been set, when this is called.

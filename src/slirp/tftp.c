@@ -22,10 +22,8 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
-#include "slirp.h"
+#include <slirp.h>
 #include "qemu-common.h"
-#include "qemu/cutils.h"
 
 static inline int tftp_session_in_use(struct tftp_session *spt)
 {
@@ -47,8 +45,7 @@ static void tftp_session_terminate(struct tftp_session *spt)
     spt->slirp = NULL;
 }
 
-static int tftp_session_allocate(Slirp *slirp, struct sockaddr_storage *srcsas,
-                                 struct tftp_t *tp)
+static int tftp_session_allocate(Slirp *slirp, struct tftp_t *tp)
 {
   struct tftp_session *spt;
   int k;
@@ -70,9 +67,8 @@ static int tftp_session_allocate(Slirp *slirp, struct sockaddr_storage *srcsas,
 
  found:
   memset(spt, 0, sizeof(*spt));
-  memcpy(&spt->client_addr, srcsas, sockaddr_size(srcsas));
+  memcpy(&spt->client_ip, &tp->ip.ip_src, sizeof(spt->client_ip));
   spt->fd = -1;
-  spt->block_size = 512;
   spt->client_port = tp->udp.uh_sport;
   spt->slirp = slirp;
 
@@ -81,8 +77,7 @@ static int tftp_session_allocate(Slirp *slirp, struct sockaddr_storage *srcsas,
   return k;
 }
 
-static int tftp_session_find(Slirp *slirp, struct sockaddr_storage *srcsas,
-                             struct tftp_t *tp)
+static int tftp_session_find(Slirp *slirp, struct tftp_t *tp)
 {
   struct tftp_session *spt;
   int k;
@@ -91,7 +86,7 @@ static int tftp_session_find(Slirp *slirp, struct sockaddr_storage *srcsas,
     spt = &slirp->tftp_sessions[k];
 
     if (tftp_session_in_use(spt)) {
-      if (sockaddr_equal(&spt->client_addr, srcsas)) {
+      if (!memcmp(&spt->client_ip, &tp->ip.ip_src, sizeof(spt->client_ip))) {
 	if (spt->client_port == tp->udp.uh_sport) {
 	  return k;
 	}
@@ -116,7 +111,7 @@ static int tftp_read_data(struct tftp_session *spt, uint32_t block_nr,
     }
 
     if (len) {
-        lseek(spt->fd, block_nr * spt->block_size, SEEK_SET);
+        lseek(spt->fd, block_nr * 512, SEEK_SET);
 
         bytes_read = read(spt->fd, buf, len);
     }
@@ -124,53 +119,11 @@ static int tftp_read_data(struct tftp_session *spt, uint32_t block_nr,
     return bytes_read;
 }
 
-static struct tftp_t *tftp_prep_mbuf_data(struct tftp_session *spt,
-                                          struct mbuf *m)
-{
-    struct tftp_t *tp;
-
-    memset(m->m_data, 0, m->m_size);
-
-    m->m_data += IF_MAXLINKHDR;
-    if (spt->client_addr.ss_family == AF_INET6) {
-        m->m_data += sizeof(struct ip6);
-    } else {
-        m->m_data += sizeof(struct ip);
-    }
-    tp = (void *)m->m_data;
-    m->m_data += sizeof(struct udphdr);
-
-    return tp;
-}
-
-static void tftp_udp_output(struct tftp_session *spt, struct mbuf *m,
-                            struct tftp_t *recv_tp)
-{
-    if (spt->client_addr.ss_family == AF_INET6) {
-        struct sockaddr_in6 sa6, da6;
-
-        sa6.sin6_addr = spt->slirp->vhost_addr6;
-        sa6.sin6_port = recv_tp->udp.uh_dport;
-        da6.sin6_addr = ((struct sockaddr_in6 *)&spt->client_addr)->sin6_addr;
-        da6.sin6_port = spt->client_port;
-
-        udp6_output(NULL, m, &sa6, &da6);
-    } else {
-        struct sockaddr_in sa4, da4;
-
-        sa4.sin_addr = spt->slirp->vhost_addr;
-        sa4.sin_port = recv_tp->udp.uh_dport;
-        da4.sin_addr = ((struct sockaddr_in *)&spt->client_addr)->sin_addr;
-        da4.sin_port = spt->client_port;
-
-        udp_output(NULL, m, &sa4, &da4, IPTOS_LOWDELAY);
-    }
-}
-
 static int tftp_send_oack(struct tftp_session *spt,
                           const char *keys[], uint32_t values[], int nb,
                           struct tftp_t *recv_tp)
 {
+    struct sockaddr_in saddr, daddr;
     struct mbuf *m;
     struct tftp_t *tp;
     int i, n = 0;
@@ -178,9 +131,13 @@ static int tftp_send_oack(struct tftp_session *spt,
     m = m_get(spt->slirp);
 
     if (!m)
-        return -1;
+	return -1;
 
-    tp = tftp_prep_mbuf_data(spt, m);
+    memset(m->m_data, 0, m->m_size);
+
+    m->m_data += IF_MAXLINKHDR;
+    tp = (void *)m->m_data;
+    m->m_data += sizeof(struct udpiphdr);
 
     tp->tp_op = htons(TFTP_OACK);
     for (i = 0; i < nb; i++) {
@@ -190,9 +147,15 @@ static int tftp_send_oack(struct tftp_session *spt,
                       values[i]) + 1;
     }
 
-    m->m_len = sizeof(struct tftp_t) - (TFTP_BLOCKSIZE_MAX + 2) + n
-               - sizeof(struct udphdr);
-    tftp_udp_output(spt, m, recv_tp);
+    saddr.sin_addr = recv_tp->ip.ip_dst;
+    saddr.sin_port = recv_tp->udp.uh_dport;
+
+    daddr.sin_addr = spt->client_ip;
+    daddr.sin_port = spt->client_port;
+
+    m->m_len = sizeof(struct tftp_t) - 514 + n -
+        sizeof(struct ip) - sizeof(struct udphdr);
+    udp_output2(NULL, m, &saddr, &daddr, IPTOS_LOWDELAY);
 
     return 0;
 }
@@ -201,6 +164,7 @@ static void tftp_send_error(struct tftp_session *spt,
                             uint16_t errorcode, const char *msg,
                             struct tftp_t *recv_tp)
 {
+  struct sockaddr_in saddr, daddr;
   struct mbuf *m;
   struct tftp_t *tp;
 
@@ -210,15 +174,26 @@ static void tftp_send_error(struct tftp_session *spt,
     goto out;
   }
 
-  tp = tftp_prep_mbuf_data(spt, m);
+  memset(m->m_data, 0, m->m_size);
+
+  m->m_data += IF_MAXLINKHDR;
+  tp = (void *)m->m_data;
+  m->m_data += sizeof(struct udpiphdr);
 
   tp->tp_op = htons(TFTP_ERROR);
   tp->x.tp_error.tp_error_code = htons(errorcode);
   pstrcpy((char *)tp->x.tp_error.tp_msg, sizeof(tp->x.tp_error.tp_msg), msg);
 
-  m->m_len = sizeof(struct tftp_t) - (TFTP_BLOCKSIZE_MAX + 2) + 3 + strlen(msg)
-             - sizeof(struct udphdr);
-  tftp_udp_output(spt, m, recv_tp);
+  saddr.sin_addr = recv_tp->ip.ip_dst;
+  saddr.sin_port = recv_tp->udp.uh_dport;
+
+  daddr.sin_addr = spt->client_ip;
+  daddr.sin_port = spt->client_port;
+
+  m->m_len = sizeof(struct tftp_t) - 514 + 3 + strlen(msg) -
+        sizeof(struct ip) - sizeof(struct udphdr);
+
+  udp_output2(NULL, m, &saddr, &daddr, IPTOS_LOWDELAY);
 
 out:
   tftp_session_terminate(spt);
@@ -227,6 +202,7 @@ out:
 static void tftp_send_next_block(struct tftp_session *spt,
                                  struct tftp_t *recv_tp)
 {
+  struct sockaddr_in saddr, daddr;
   struct mbuf *m;
   struct tftp_t *tp;
   int nobytes;
@@ -237,13 +213,22 @@ static void tftp_send_next_block(struct tftp_session *spt,
     return;
   }
 
-  tp = tftp_prep_mbuf_data(spt, m);
+  memset(m->m_data, 0, m->m_size);
+
+  m->m_data += IF_MAXLINKHDR;
+  tp = (void *)m->m_data;
+  m->m_data += sizeof(struct udpiphdr);
 
   tp->tp_op = htons(TFTP_DATA);
   tp->x.tp_data.tp_block_nr = htons((spt->block_nr + 1) & 0xffff);
 
-  nobytes = tftp_read_data(spt, spt->block_nr, tp->x.tp_data.tp_buf,
-                           spt->block_size);
+  saddr.sin_addr = recv_tp->ip.ip_dst;
+  saddr.sin_port = recv_tp->udp.uh_dport;
+
+  daddr.sin_addr = spt->client_ip;
+  daddr.sin_port = spt->client_port;
+
+  nobytes = tftp_read_data(spt, spt->block_nr, tp->x.tp_data.tp_buf, 512);
 
   if (nobytes < 0) {
     m_free(m);
@@ -255,11 +240,12 @@ static void tftp_send_next_block(struct tftp_session *spt,
     return;
   }
 
-  m->m_len = sizeof(struct tftp_t) - (TFTP_BLOCKSIZE_MAX - nobytes)
-             - sizeof(struct udphdr);
-  tftp_udp_output(spt, m, recv_tp);
+  m->m_len = sizeof(struct tftp_t) - (512 - nobytes) -
+        sizeof(struct ip) - sizeof(struct udphdr);
 
-  if (nobytes == spt->block_size) {
+  udp_output2(NULL, m, &saddr, &daddr, IPTOS_LOWDELAY);
+
+  if (nobytes == 512) {
     tftp_session_update(spt);
   }
   else {
@@ -269,8 +255,7 @@ static void tftp_send_next_block(struct tftp_session *spt,
   spt->block_nr++;
 }
 
-static void tftp_handle_rrq(Slirp *slirp, struct sockaddr_storage *srcsas,
-                            struct tftp_t *tp, int pktlen)
+static void tftp_handle_rrq(Slirp *slirp, struct tftp_t *tp, int pktlen)
 {
   struct tftp_session *spt;
   int s, k;
@@ -281,12 +266,12 @@ static void tftp_handle_rrq(Slirp *slirp, struct sockaddr_storage *srcsas,
   int nb_options = 0;
 
   /* check if a session already exists and if so terminate it */
-  s = tftp_session_find(slirp, srcsas, tp);
+  s = tftp_session_find(slirp, tp);
   if (s >= 0) {
     tftp_session_terminate(&slirp->tftp_sessions[s]);
   }
 
-  s = tftp_session_allocate(slirp, srcsas, tp);
+  s = tftp_session_allocate(slirp, tp);
 
   if (s < 0) {
     return;
@@ -389,11 +374,13 @@ static void tftp_handle_rrq(Slirp *slirp, struct sockaddr_storage *srcsas,
       } else if (strcasecmp(key, "blksize") == 0) {
           int blksize = atoi(value);
 
-          /* Accept blksize up to our maximum size */
-          if (blksize > 0) {
-              spt->block_size = MIN(blksize, TFTP_BLOCKSIZE_MAX);
+          /* If blksize option is bigger than what we will
+           * emit, accept the option with our packet size.
+           * Otherwise, simply do as we didn't see the option.
+           */
+          if (blksize >= 512) {
               option_name[nb_options] = "blksize";
-              option_value[nb_options] = spt->block_size;
+              option_value[nb_options] = 512;
               nb_options++;
           }
       }
@@ -409,12 +396,11 @@ static void tftp_handle_rrq(Slirp *slirp, struct sockaddr_storage *srcsas,
   tftp_send_next_block(spt, tp);
 }
 
-static void tftp_handle_ack(Slirp *slirp, struct sockaddr_storage *srcsas,
-                            struct tftp_t *tp, int pktlen)
+static void tftp_handle_ack(Slirp *slirp, struct tftp_t *tp, int pktlen)
 {
   int s;
 
-  s = tftp_session_find(slirp, srcsas, tp);
+  s = tftp_session_find(slirp, tp);
 
   if (s < 0) {
     return;
@@ -423,12 +409,11 @@ static void tftp_handle_ack(Slirp *slirp, struct sockaddr_storage *srcsas,
   tftp_send_next_block(&slirp->tftp_sessions[s], tp);
 }
 
-static void tftp_handle_error(Slirp *slirp, struct sockaddr_storage *srcsas,
-                              struct tftp_t *tp, int pktlen)
+static void tftp_handle_error(Slirp *slirp, struct tftp_t *tp, int pktlen)
 {
   int s;
 
-  s = tftp_session_find(slirp, srcsas, tp);
+  s = tftp_session_find(slirp, tp);
 
   if (s < 0) {
     return;
@@ -437,21 +422,21 @@ static void tftp_handle_error(Slirp *slirp, struct sockaddr_storage *srcsas,
   tftp_session_terminate(&slirp->tftp_sessions[s]);
 }
 
-void tftp_input(struct sockaddr_storage *srcsas, struct mbuf *m)
+void tftp_input(struct mbuf *m)
 {
   struct tftp_t *tp = (struct tftp_t *)m->m_data;
 
   switch(ntohs(tp->tp_op)) {
   case TFTP_RRQ:
-    tftp_handle_rrq(m->slirp, srcsas, tp, m->m_len);
+    tftp_handle_rrq(m->slirp, tp, m->m_len);
     break;
 
   case TFTP_ACK:
-    tftp_handle_ack(m->slirp, srcsas, tp, m->m_len);
+    tftp_handle_ack(m->slirp, tp, m->m_len);
     break;
 
   case TFTP_ERROR:
-    tftp_handle_error(m->slirp, srcsas, tp, m->m_len);
+    tftp_handle_error(m->slirp, tp, m->m_len);
     break;
   }
 }

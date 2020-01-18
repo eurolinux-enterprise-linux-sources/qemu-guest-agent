@@ -18,11 +18,10 @@
  *
  *
  * Specification available at:
- *   http://milkymist.walle.cc/socdoc/pfpu.pdf
+ *   http://www.milkymist.org/socdoc/pfpu.pdf
  *
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "trace.h"
@@ -125,7 +124,7 @@ struct MilkymistPFPUState {
     SysBusDevice parent_obj;
 
     MemoryRegion regs_region;
-    Chardev *chr;
+    CharDriverState *chr;
     qemu_irq irq;
 
     uint32_t regs[R_MAX];
@@ -137,7 +136,7 @@ struct MilkymistPFPUState {
 };
 typedef struct MilkymistPFPUState MilkymistPFPUState;
 
-static inline uint32_t
+static inline hwaddr
 get_dma_address(uint32_t base, uint32_t x, uint32_t y)
 {
     return base + 8 * (128 * y + x);

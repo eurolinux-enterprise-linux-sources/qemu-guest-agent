@@ -98,6 +98,7 @@ int ath_rx_init(struct ath_softc *sc, int nbufs)
 {
 	struct ath_common *common = ath9k_hw_common(sc->sc_ah);
 	struct io_buffer *iob;
+	u32 *iob_addr = NULL;
 	struct ath_buf *bf;
 	int error = 0;
 
@@ -121,14 +122,15 @@ int ath_rx_init(struct ath_softc *sc, int nbufs)
 	}
 
 	list_for_each_entry(bf, &sc->rx.rxbuf, list) {
-		iob = alloc_iob_raw ( common->rx_bufsize, common->cachelsz, 0 );
+		iob = ath_rxbuf_alloc(common, common->rx_bufsize,
+				      iob_addr);
 		if (iob == NULL) {
 			error = -ENOMEM;
 			goto err;
 		}
 
 		bf->bf_mpdu = iob;
-		bf->bf_buf_addr = virt_to_bus ( iob->data );
+		bf->bf_buf_addr = *iob_addr;
 	}
 	sc->rx.rxlink = NULL;
 
@@ -431,6 +433,7 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, int hp __unused)
 {
 	struct ath_buf *bf;
 	struct io_buffer *iob = NULL, *requeue_iob;
+	u32 *requeue_iob_addr = NULL;
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath_common *common = ath9k_hw_common(ah);
 	/*
@@ -473,8 +476,7 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, int hp __unused)
 
 		/* Ensure we always have an iob to requeue once we are done
 		 * processing the current buffer's iob */
-		requeue_iob = alloc_iob_raw ( common->rx_bufsize,
-					      common->cachelsz, 0 );
+		requeue_iob = ath_rxbuf_alloc(common, common->rx_bufsize, requeue_iob_addr);
 
 		/* If there is no memory we ignore the current RX'd frame,
 		 * tell hardware it can give us a new frame using the old
@@ -489,7 +491,7 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, int hp __unused)
 
 		/* We will now give hardware our shiny new allocated iob */
 		bf->bf_mpdu = requeue_iob;
-		bf->bf_buf_addr = virt_to_bus ( requeue_iob->data );
+		bf->bf_buf_addr = *requeue_iob_addr;
 
 		/*
 		 * change the default rx antenna if rx diversity chooses the

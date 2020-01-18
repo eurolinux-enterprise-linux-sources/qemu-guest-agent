@@ -15,12 +15,12 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include <spice.h>
 
 #include <netdb.h>
 #include "sysemu/sysemu.h"
 
+#include "qemu-common.h"
 #include "ui/qemu-spice.h"
 #include "qemu/error-report.h"
 #include "qemu/thread.h"
@@ -28,14 +28,16 @@
 #include "qemu/queue.h"
 #include "qemu-x509.h"
 #include "qemu/sockets.h"
-#include "qapi/error.h"
-#include "qapi/qapi-commands-ui.h"
-#include "qapi/qapi-events-ui.h"
+#include "qmp-commands.h"
+#include "qapi/qmp/qint.h"
+#include "qapi/qmp/qbool.h"
+#include "qapi/qmp/qstring.h"
+#include "qapi/qmp/qjson.h"
 #include "qemu/notify.h"
-#include "qemu/option.h"
-#include "migration/misc.h"
+#include "migration/migration.h"
 #include "hw/hw.h"
 #include "ui/spice-display.h"
+#include "qapi-event.h"
 
 /* core bits */
 
@@ -53,7 +55,9 @@ static QemuThread me;
 
 struct SpiceTimer {
     QEMUTimer *timer;
+    QTAILQ_ENTRY(SpiceTimer) next;
 };
+static QTAILQ_HEAD(, SpiceTimer) timers = QTAILQ_HEAD_INITIALIZER(timers);
 
 static SpiceTimer *timer_add(SpiceTimerFunc func, void *opaque)
 {
@@ -61,6 +65,7 @@ static SpiceTimer *timer_add(SpiceTimerFunc func, void *opaque)
 
     timer = g_malloc0(sizeof(*timer));
     timer->timer = timer_new_ms(QEMU_CLOCK_REALTIME, func, opaque);
+    QTAILQ_INSERT_TAIL(&timers, timer, next);
     return timer;
 }
 
@@ -78,14 +83,18 @@ static void timer_remove(SpiceTimer *timer)
 {
     timer_del(timer->timer);
     timer_free(timer->timer);
+    QTAILQ_REMOVE(&timers, timer, next);
     g_free(timer);
 }
 
 struct SpiceWatch {
     int fd;
+    int event_mask;
     SpiceWatchFunc func;
     void *opaque;
+    QTAILQ_ENTRY(SpiceWatch) next;
 };
+static QTAILQ_HEAD(, SpiceWatch) watches = QTAILQ_HEAD_INITIALIZER(watches);
 
 static void watch_read(void *opaque)
 {
@@ -104,10 +113,11 @@ static void watch_update_mask(SpiceWatch *watch, int event_mask)
     IOHandler *on_read = NULL;
     IOHandler *on_write = NULL;
 
-    if (event_mask & SPICE_WATCH_EVENT_READ) {
+    watch->event_mask = event_mask;
+    if (watch->event_mask & SPICE_WATCH_EVENT_READ) {
         on_read = watch_read;
     }
-    if (event_mask & SPICE_WATCH_EVENT_WRITE) {
+    if (watch->event_mask & SPICE_WATCH_EVENT_WRITE) {
         on_write = watch_write;
     }
     qemu_set_fd_handler(watch->fd, on_read, on_write, watch);
@@ -121,6 +131,7 @@ static SpiceWatch *watch_add(int fd, int event_mask, SpiceWatchFunc func, void *
     watch->fd     = fd;
     watch->func   = func;
     watch->opaque = opaque;
+    QTAILQ_INSERT_TAIL(&watches, watch, next);
 
     watch_update_mask(watch, event_mask);
     return watch;
@@ -129,6 +140,7 @@ static SpiceWatch *watch_add(int fd, int event_mask, SpiceWatchFunc func, void *
 static void watch_remove(SpiceWatch *watch)
 {
     qemu_set_fd_handler(watch->fd, NULL, NULL, NULL);
+    QTAILQ_REMOVE(&watches, watch, next);
     g_free(watch);
 }
 
@@ -481,23 +493,9 @@ static QemuOptsList qemu_spice_opts = {
         },{
             .name = "playback-compression",
             .type = QEMU_OPT_BOOL,
-        },{
+        }, {
             .name = "seamless-migration",
             .type = QEMU_OPT_BOOL,
-        },{
-            .name = "display",
-            .type = QEMU_OPT_STRING,
-        },{
-            .name = "head",
-            .type = QEMU_OPT_NUMBER,
-#ifdef HAVE_SPICE_GL
-        },{
-            .name = "gl",
-            .type = QEMU_OPT_BOOL,
-        },{
-            .name = "rendernode",
-            .type = QEMU_OPT_STRING,
-#endif
         },
         { /* end of list */ }
     },
@@ -569,8 +567,7 @@ static void migration_state_notifier(Notifier *notifier, void *data)
 
     if (migration_in_setup(s)) {
         spice_server_migrate_start(spice_server);
-    } else if (migration_has_finished(s) ||
-               migration_in_postcopy_after_devices(s)) {
+    } else if (migration_has_finished(s)) {
         spice_server_migrate_end(spice_server, true);
         spice_have_target_host = false;
     } else if (migration_has_failed(s)) {
@@ -730,7 +727,8 @@ void qemu_spice_init(void)
         qemu_spice_set_passwd(password, false, false);
     }
     if (qemu_opt_get_bool(opts, "sasl", 0)) {
-        if (spice_server_set_sasl(spice_server, 1) == -1) {
+        if (spice_server_set_sasl_appname(spice_server, "qemu") == -1 ||
+            spice_server_set_sasl(spice_server, 1) == -1) {
             error_report("spice: failed to enable sasl");
             exit(1);
         }
@@ -792,11 +790,10 @@ void qemu_spice_init(void)
     qemu_opt_foreach(opts, add_channel, &tls_port, NULL);
 
     spice_server_set_name(spice_server, qemu_name);
-    spice_server_set_uuid(spice_server, (unsigned char *)&qemu_uuid);
+    spice_server_set_uuid(spice_server, qemu_uuid);
 
     seamless_migration = qemu_opt_get_bool(opts, "seamless-migration", 0);
     spice_server_set_seamless_migration(spice_server, seamless_migration);
-    spice_server_set_sasl_appname(spice_server, "qemu");
     if (spice_server_init(spice_server, &core_interface) != 0) {
         error_report("failed to initialize spice server");
         exit(1);
@@ -820,22 +817,6 @@ void qemu_spice_init(void)
 
 #if SPICE_SERVER_VERSION >= 0x000c02
     qemu_spice_register_ports();
-#endif
-
-#ifdef HAVE_SPICE_GL
-    if (qemu_opt_get_bool(opts, "gl", 0)) {
-        if ((port != 0) || (tls_port != 0)) {
-            error_report("SPICE GL support is local-only for now and "
-                         "incompatible with -spice port/tls-port");
-            exit(1);
-        }
-        if (egl_rendernode_init(qemu_opt_get(opts, "rendernode")) != 0) {
-            error_report("Failed to initialize EGL render node for SPICE GL");
-            exit(1);
-        }
-        display_opengl = 1;
-        spice_opengl = 1;
-    }
 #endif
 }
 
@@ -949,4 +930,4 @@ static void spice_register_config(void)
 {
     qemu_add_opts(&qemu_spice_opts);
 }
-opts_init(spice_register_config);
+machine_init(spice_register_config);

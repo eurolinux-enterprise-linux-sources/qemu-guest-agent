@@ -25,6 +25,7 @@
 #ifndef TIMED_AVERAGE_H
 #define TIMED_AVERAGE_H
 
+#include <stdint.h>
 
 #include "qemu/timer.h"
 

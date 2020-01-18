@@ -19,8 +19,6 @@ struct efi_device {
 	struct device dev;
 	/** EFI device handle */
 	EFI_HANDLE device;
-	/** EFI device path copy */
-	EFI_DEVICE_PATH_PROTOCOL *path;
 	/** Driver for this device */
 	struct efi_driver *driver;
 	/** Driver-private data */

@@ -7,7 +7,6 @@
  * This code is licensed under the GPL
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "net/net.h"
 #include "hw/devices.h"
@@ -755,7 +754,7 @@ static const MemoryRegionOps smc91c111_mem_ops = {
 };
 
 static NetClientInfo net_smc91c111_info = {
-    .type = NET_CLIENT_DRIVER_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .can_receive = smc91c111_can_receive_nc,
     .receive = smc91c111_receive,

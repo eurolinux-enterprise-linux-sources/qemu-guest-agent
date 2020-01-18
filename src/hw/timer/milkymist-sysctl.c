@@ -18,10 +18,9 @@
  *
  *
  * Specification available at:
- *   http://milkymist.walle.cc/socdoc/sysctl.pdf
+ *   http://www.milkymist.org/socdoc/sysctl.pdf
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "sysemu/sysemu.h"
@@ -90,7 +89,7 @@ static void sysctl_icap_write(MilkymistSysctlState *s, uint32_t value)
     trace_milkymist_sysctl_icap_write(value);
     switch (value & 0xffff) {
     case 0x000e:
-        qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+        qemu_system_shutdown_request();
         break;
     }
 }
@@ -195,7 +194,7 @@ static void sysctl_write(void *opaque, hwaddr addr, uint64_t value,
         s->regs[addr] = 1;
         break;
     case R_SYSTEM_ID:
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        qemu_system_reset_request();
         break;
 
     case R_GPIO_IN:
@@ -270,10 +269,9 @@ static void milkymist_sysctl_reset(DeviceState *d)
     s->regs[R_GPIO_IN] = s->strappings;
 }
 
-static void milkymist_sysctl_init(Object *obj)
+static int milkymist_sysctl_init(SysBusDevice *dev)
 {
-    MilkymistSysctlState *s = MILKYMIST_SYSCTL(obj);
-    SysBusDevice *dev = SYS_BUS_DEVICE(obj);
+    MilkymistSysctlState *s = MILKYMIST_SYSCTL(dev);
 
     sysbus_init_irq(dev, &s->gpio_irq);
     sysbus_init_irq(dev, &s->timer0_irq);
@@ -281,20 +279,16 @@ static void milkymist_sysctl_init(Object *obj)
 
     s->bh0 = qemu_bh_new(timer0_hit, s);
     s->bh1 = qemu_bh_new(timer1_hit, s);
-    s->ptimer0 = ptimer_init(s->bh0, PTIMER_POLICY_DEFAULT);
-    s->ptimer1 = ptimer_init(s->bh1, PTIMER_POLICY_DEFAULT);
-
-    memory_region_init_io(&s->regs_region, obj, &sysctl_mmio_ops, s,
-            "milkymist-sysctl", R_MAX * 4);
-    sysbus_init_mmio(dev, &s->regs_region);
-}
-
-static void milkymist_sysctl_realize(DeviceState *dev, Error **errp)
-{
-    MilkymistSysctlState *s = MILKYMIST_SYSCTL(dev);
-
+    s->ptimer0 = ptimer_init(s->bh0);
+    s->ptimer1 = ptimer_init(s->bh1);
     ptimer_set_freq(s->ptimer0, s->freq_hz);
     ptimer_set_freq(s->ptimer1, s->freq_hz);
+
+    memory_region_init_io(&s->regs_region, OBJECT(s), &sysctl_mmio_ops, s,
+            "milkymist-sysctl", R_MAX * 4);
+    sysbus_init_mmio(dev, &s->regs_region);
+
+    return 0;
 }
 
 static const VMStateDescription vmstate_milkymist_sysctl = {
@@ -324,8 +318,9 @@ static Property milkymist_sysctl_properties[] = {
 static void milkymist_sysctl_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    dc->realize = milkymist_sysctl_realize;
+    k->init = milkymist_sysctl_init;
     dc->reset = milkymist_sysctl_reset;
     dc->vmsd = &vmstate_milkymist_sysctl;
     dc->props = milkymist_sysctl_properties;
@@ -335,7 +330,6 @@ static const TypeInfo milkymist_sysctl_info = {
     .name          = TYPE_MILKYMIST_SYSCTL,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(MilkymistSysctlState),
-    .instance_init = milkymist_sysctl_init,
     .class_init    = milkymist_sysctl_class_init,
 };
 

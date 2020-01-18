@@ -1,10 +1,16 @@
 /* This is the Linux kernel elf-loading code, ported into user space */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "qemu.h"
 #include "disas/disas.h"
-#include "qemu/path.h"
 
 #ifdef _ARCH_PPC64
 #undef ARCH_DLINFO
@@ -1155,20 +1161,21 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
     unsigned int interpreter_type = INTERPRETER_NONE;
     unsigned char ibcs2_interpreter;
     int i;
+    abi_ulong mapped_addr;
     struct elf_phdr * elf_ppnt;
     struct elf_phdr *elf_phdata;
     abi_ulong elf_bss, k, elf_brk;
     int retval;
     char * elf_interpreter;
     abi_ulong elf_entry, interp_load_addr = 0;
+    int status;
     abi_ulong start_code, end_code, start_data, end_data;
     abi_ulong reloc_func_desc = 0;
-#ifdef LOW_ELF_STACK
-    abi_ulong elf_stack = ~((abi_ulong)0UL);
-#endif
+    abi_ulong elf_stack;
     char passed_fileno[6];
 
     ibcs2_interpreter = 0;
+    status = 0;
     load_addr = 0;
     load_bias = 0;
     elf_ex = *((struct elfhdr *) bprm->buf);          /* exec-header */
@@ -1220,6 +1227,7 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
     elf_brk = 0;
 
 
+    elf_stack = ~((abi_ulong)0UL);
     elf_interpreter = NULL;
     start_code = ~((abi_ulong)0UL);
     end_code = 0;
@@ -1544,7 +1552,7 @@ int load_elf_binary(struct linux_binprm * bprm, struct target_pt_regs * regs,
                and some applications "depend" upon this behavior.
                Since we do not have the power to recompile these, we
                emulate the SVr4 behavior.  Sigh.  */
-            target_mmap(0, qemu_host_page_size, PROT_READ | PROT_EXEC,
+            mapped_addr = target_mmap(0, qemu_host_page_size, PROT_READ | PROT_EXEC,
                                       MAP_FIXED | MAP_PRIVATE, -1, 0);
     }
 

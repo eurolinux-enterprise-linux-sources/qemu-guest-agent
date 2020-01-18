@@ -21,10 +21,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
-#include "qapi/error.h"
-#include "qemu-common.h"
-#include "cpu.h"
 #include "hw/hw.h"
 #include "hw/ppc/ppc.h"
 #include "ppc405.h"
@@ -37,6 +33,7 @@
 #include "qemu/log.h"
 #include "qemu/error-report.h"
 #include "hw/loader.h"
+#include "sysemu/block-backend.h"
 #include "sysemu/blockdev.h"
 #include "exec/address-spaces.h"
 
@@ -202,13 +199,6 @@ static void ref405ep_init(MachineState *machine)
     DriveInfo *dinfo;
     MemoryRegion *sysmem = get_system_memory();
 
-#ifdef TARGET_PPCEMB
-    if (!qtest_enabled()) {
-        warn_report("qemu-system-ppcemb is deprecated, "
-                    "please use qemu-system-ppc instead.");
-    }
-#endif
-
     /* XXX: fix this */
     memory_region_allocate_system_memory(&ram_memories[0], NULL, "ef405ep.ram",
                                          0x08000000);
@@ -227,6 +217,7 @@ static void ref405ep_init(MachineState *machine)
     sram_size = 512 * 1024;
     memory_region_init_ram(sram, NULL, "ef405ep.sram", sram_size,
                            &error_fatal);
+    vmstate_register_ram_global(sram);
     memory_region_add_subregion(sysmem, 0xFFF00000, sram);
     /* allocate and load BIOS */
 #ifdef DEBUG_BOARD_INIT
@@ -261,6 +252,7 @@ static void ref405ep_init(MachineState *machine)
         bios = g_new(MemoryRegion, 1);
         memory_region_init_ram(bios, NULL, "ef405ep.bios", BIOS_SIZE,
                                &error_fatal);
+        vmstate_register_ram_global(bios);
 
         if (bios_name == NULL)
             bios_name = BIOS_FILENAME;
@@ -331,7 +323,8 @@ static void ref405ep_init(MachineState *machine)
         kernel_size = load_image_targphys(kernel_filename, kernel_base,
                                           ram_size - kernel_base);
         if (kernel_size < 0) {
-            error_report("could not load kernel '%s'", kernel_filename);
+            fprintf(stderr, "qemu: could not load kernel '%s'\n",
+                    kernel_filename);
             exit(1);
         }
         printf("Load kernel size %ld at " TARGET_FMT_lx,
@@ -342,8 +335,8 @@ static void ref405ep_init(MachineState *machine)
             initrd_size = load_image_targphys(initrd_filename, initrd_base,
                                               ram_size - initrd_base);
             if (initrd_size < 0) {
-                error_report("could not load initial ram disk '%s'",
-                             initrd_filename);
+                fprintf(stderr, "qemu: could not load initial ram disk '%s'\n",
+                        initrd_filename);
                 exit(1);
             }
         } else {
@@ -503,13 +496,6 @@ static void taihu_405ep_init(MachineState *machine)
     int fl_idx, fl_sectors;
     DriveInfo *dinfo;
 
-#ifdef TARGET_PPCEMB
-    if (!qtest_enabled()) {
-        warn_report("qemu-system-ppcemb is deprecated, "
-                    "please use qemu-system-ppc instead.");
-    }
-#endif
-
     /* RAM is soldered to the board so the size cannot be changed */
     ram_size = 0x08000000;
     memory_region_allocate_system_memory(ram, NULL, "taihu_405ep.ram",
@@ -567,6 +553,7 @@ static void taihu_405ep_init(MachineState *machine)
         bios = g_new(MemoryRegion, 1);
         memory_region_init_ram(bios, NULL, "taihu_405ep.bios", BIOS_SIZE,
                                &error_fatal);
+        vmstate_register_ram_global(bios);
         filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, bios_name);
         if (filename) {
             bios_size = load_image(filename, memory_region_get_ram_ptr(bios));
@@ -620,7 +607,8 @@ static void taihu_405ep_init(MachineState *machine)
         kernel_size = load_image_targphys(kernel_filename, kernel_base,
                                           ram_size - kernel_base);
         if (kernel_size < 0) {
-            error_report("could not load kernel '%s'", kernel_filename);
+            fprintf(stderr, "qemu: could not load kernel '%s'\n",
+                    kernel_filename);
             exit(1);
         }
         /* load initrd */
@@ -629,8 +617,9 @@ static void taihu_405ep_init(MachineState *machine)
             initrd_size = load_image_targphys(initrd_filename, initrd_base,
                                               ram_size - initrd_base);
             if (initrd_size < 0) {
-                error_report("could not load initial ram disk '%s'",
-                             initrd_filename);
+                fprintf(stderr,
+                        "qemu: could not load initial ram disk '%s'\n",
+                        initrd_filename);
                 exit(1);
             }
         } else {
@@ -668,4 +657,4 @@ static void ppc405_machine_init(void)
     type_register_static(&taihu_type);
 }
 
-type_init(ppc405_machine_init)
+machine_init(ppc405_machine_init)

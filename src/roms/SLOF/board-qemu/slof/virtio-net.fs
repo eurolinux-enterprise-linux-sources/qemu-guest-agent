@@ -16,29 +16,20 @@ s" network" device-type
 
 INSTANCE VARIABLE obp-tftp-package
 
-virtio-setup-vd VALUE virtiodev
+/vd-len BUFFER: virtiodev
+virtiodev virtio-setup-vd
 0 VALUE virtio-net-priv
 0 VALUE open-count
-
-\ Set up MAC address from config virtqueue
-6 BUFFER: local-mac
-: setup-mac  ( -- )
-   s" local-mac-address" get-node get-property not IF 2drop EXIT THEN
-   6 0 DO
-      virtiodev i 1 virtio-get-config
-      local-mac i + c!
-   LOOP
-   local-mac 6 encode-bytes  s" local-mac-address"  property
-;
 
 : open  ( -- okay? )
    open-count 0= IF
       open IF
          \ my-unit 1 rtas-set-tce-bypass
-         virtiodev virtio-net-open
-         not IF ." virtio-net-open failed" cr false EXIT THEN
-         TO virtio-net-priv
-         setup-mac true
+         s" local-mac-address" get-node get-property not IF
+            virtiodev virtio-net-open dup not IF ." virtio-net-open failed" EXIT THEN
+            drop TO virtio-net-priv
+         THEN
+         true
       ELSE
          false
       THEN
@@ -64,7 +55,7 @@ virtio-setup-vd VALUE virtiodev
 
 : read ( buf len -- actual )
    dup IF
-      virtio-net-priv virtio-net-read
+      virtio-net-read
    ELSE
       nip
    THEN
@@ -72,7 +63,7 @@ virtio-setup-vd VALUE virtiodev
 
 : write ( buf len -- actual )
    dup IF
-      virtio-net-priv virtio-net-write
+      virtio-net-write
    ELSE
       nip
    THEN
@@ -86,16 +77,20 @@ virtio-setup-vd VALUE virtiodev
    s" ping" obp-tftp-package @ $call-method
 ;
 
+\ Set up MAC address from config virtqueue
+6 BUFFER: local-mac
+: setup-mac  ( -- )
+   6 0 DO
+      virtiodev i 1 virtio-get-config
+      local-mac i + c!
+   LOOP
+   local-mac 6 encode-bytes  s" local-mac-address"  property
+;
+setup-mac
+
 : setup-alias  ( -- )
    " net" get-next-alias ?dup IF
       get-node node>path set-alias
    THEN
 ;
 setup-alias
-
-\ Create instance, this will populate the mac address
-: virtio-net-init ( -- )
-    0 0 get-node open-node
-    ?dup IF close-node THEN
-;
-virtio-net-init

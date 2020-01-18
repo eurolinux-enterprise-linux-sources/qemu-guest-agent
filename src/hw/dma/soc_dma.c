@@ -17,8 +17,6 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-#include "qemu/osdep.h"
-#include "qemu/error-report.h"
 #include "qemu-common.h"
 #include "qemu/timer.h"
 #include "hw/arm/soc_dma.h"
@@ -271,11 +269,12 @@ void soc_dma_port_add_fifo(struct soc_dma_s *soc, hwaddr virt_base,
         if (entry->type == soc_dma_port_mem) {
             if (entry->addr <= virt_base &&
                             entry->addr + entry->u.mem.size > virt_base) {
-                error_report("%s: FIFO at %"PRIx64
-                             " collides with RAM region at %"PRIx64
-                             "-%"PRIx64, __func__,
-                             virt_base, entry->addr,
-                             (entry->addr + entry->u.mem.size));
+                fprintf(stderr, "%s: FIFO at " TARGET_FMT_lx
+                                " collides with RAM region at " TARGET_FMT_lx
+                                "-" TARGET_FMT_lx "\n", __FUNCTION__,
+                                (target_ulong) virt_base,
+                                (target_ulong) entry->addr, (target_ulong)
+                                (entry->addr + entry->u.mem.size));
                 exit(-1);
             }
 
@@ -285,9 +284,10 @@ void soc_dma_port_add_fifo(struct soc_dma_s *soc, hwaddr virt_base,
             while (entry < dma->memmap + dma->memmap_size &&
                             entry->addr <= virt_base) {
                 if (entry->addr == virt_base && entry->u.fifo.out == out) {
-                    error_report("%s: FIFO at %"PRIx64
-                                 " collides FIFO at %"PRIx64,
-                                 __func__, virt_base, entry->addr);
+                    fprintf(stderr, "%s: FIFO at " TARGET_FMT_lx
+                                    " collides FIFO at " TARGET_FMT_lx "\n",
+                                    __FUNCTION__, (target_ulong) virt_base,
+                                    (target_ulong) entry->addr);
                     exit(-1);
                 }
 
@@ -322,11 +322,13 @@ void soc_dma_port_add_mem(struct soc_dma_s *soc, uint8_t *phys_base,
             if ((entry->addr >= virt_base && entry->addr < virt_base + size) ||
                             (entry->addr <= virt_base &&
                              entry->addr + entry->u.mem.size > virt_base)) {
-                error_report("%s: RAM at %"PRIx64 "-%"PRIx64
-                             " collides with RAM region at %"PRIx64
-                             "-%"PRIx64, __func__,
-                             virt_base, virt_base + size,
-                             entry->addr, entry->addr + entry->u.mem.size);
+                fprintf(stderr, "%s: RAM at " TARGET_FMT_lx "-" TARGET_FMT_lx
+                                " collides with RAM region at " TARGET_FMT_lx
+                                "-" TARGET_FMT_lx "\n", __FUNCTION__,
+                                (target_ulong) virt_base,
+                                (target_ulong) (virt_base + size),
+                                (target_ulong) entry->addr, (target_ulong)
+                                (entry->addr + entry->u.mem.size));
                 exit(-1);
             }
 
@@ -335,10 +337,12 @@ void soc_dma_port_add_mem(struct soc_dma_s *soc, uint8_t *phys_base,
         } else {
             if (entry->addr >= virt_base &&
                             entry->addr < virt_base + size) {
-                error_report("%s: RAM at %"PRIx64 "-%"PRIx64
-                             " collides with FIFO at %"PRIx64,
-                             __func__, virt_base, virt_base + size,
-                             entry->addr);
+                fprintf(stderr, "%s: RAM at " TARGET_FMT_lx "-" TARGET_FMT_lx
+                                " collides with FIFO at " TARGET_FMT_lx
+                                "\n", __FUNCTION__,
+                                (target_ulong) virt_base,
+                                (target_ulong) (virt_base + size),
+                                (target_ulong) entry->addr);
                 exit(-1);
             }
 

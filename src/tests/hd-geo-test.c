@@ -15,11 +15,12 @@
  * Improvements welcome.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include "qemu-common.h"
 #include "libqtest.h"
-
-#define ARGV_SIZE 256
 
 static char *create_test_img(int secs)
 {
@@ -68,7 +69,7 @@ static const CHST hd_chst[backend_last][mbr_last] = {
     },
 };
 
-static char *img_file_name[backend_last];
+static const char *img_file_name[backend_last];
 
 static const CHST *cur_ide[4];
 
@@ -205,13 +206,13 @@ static int setup_ide(int argc, char *argv[], int argv_sz,
 {
     char *s1, *s2, *s3;
 
-    s1 = g_strdup_printf("-drive id=drive%d,if=%s",
+    s1 = g_strdup_printf("-drive id=drive%d,if=%s,format=raw",
                          ide_idx, dev ? "none" : "ide");
     s2 = dev ? g_strdup("") : g_strdup_printf(",index=%d", ide_idx);
 
     if (img_secs[img_idx] >= 0) {
         setup_mbr(img_idx, mbr);
-        s3 = g_strdup_printf(",format=raw,file=%s", img_file_name[img_idx]);
+        s3 = g_strdup_printf(",file=%s", img_file_name[img_idx]);
     } else {
         s3 = g_strdup(",media=cdrom");
     }
@@ -236,36 +237,28 @@ static int setup_ide(int argc, char *argv[], int argv_sz,
  */
 static void test_ide_none(void)
 {
-    char **argv = g_new0(char *, ARGV_SIZE);
-    char *args;
+    char *argv[256];
 
-    setup_common(argv, ARGV_SIZE);
-    args = g_strjoinv(" ", argv);
-    qtest_start(args);
-    g_strfreev(argv);
-    g_free(args);
+    setup_common(argv, ARRAY_SIZE(argv));
+    qtest_start(g_strjoinv(" ", argv));
     test_cmos();
     qtest_end();
 }
 
 static void test_ide_mbr(bool use_device, MBRcontents mbr)
 {
-    char **argv = g_new0(char *, ARGV_SIZE);
-    char *args;
+    char *argv[256];
     int argc;
     Backend i;
     const char *dev;
 
-    argc = setup_common(argv, ARGV_SIZE);
+    argc = setup_common(argv, ARRAY_SIZE(argv));
     for (i = 0; i < backend_last; i++) {
         cur_ide[i] = &hd_chst[i][mbr];
         dev = use_device ? (is_hd(cur_ide[i]) ? "ide-hd" : "ide-cd") : NULL;
-        argc = setup_ide(argc, argv, ARGV_SIZE, i, dev, i, mbr, "");
+        argc = setup_ide(argc, argv, ARRAY_SIZE(argv), i, dev, i, mbr, "");
     }
-    args = g_strjoinv(" ", argv);
-    qtest_start(args);
-    g_strfreev(argv);
-    g_free(args);
+    qtest_start(g_strjoinv(" ", argv));
     test_cmos();
     qtest_end();
 }
@@ -320,13 +313,12 @@ static void test_ide_device_mbr_chs(void)
 
 static void test_ide_drive_user(const char *dev, bool trans)
 {
-    char **argv = g_new0(char *, ARGV_SIZE);
-    char *args, *opts;
+    char *argv[256], *opts;
     int argc;
     int secs = img_secs[backend_small];
     const CHST expected_chst = { secs / (4 * 32) , 4, 32, trans };
 
-    argc = setup_common(argv, ARGV_SIZE);
+    argc = setup_common(argv, ARRAY_SIZE(argv));
     opts = g_strdup_printf("%s,%s%scyls=%d,heads=%d,secs=%d",
                            dev ?: "",
                            trans && dev ? "bios-chs-" : "",
@@ -334,14 +326,11 @@ static void test_ide_drive_user(const char *dev, bool trans)
                            expected_chst.cyls, expected_chst.heads,
                            expected_chst.secs);
     cur_ide[0] = &expected_chst;
-    argc = setup_ide(argc, argv, ARGV_SIZE,
+    argc = setup_ide(argc, argv, ARRAY_SIZE(argv),
                      0, dev ? opts : NULL, backend_small, mbr_chs,
                      dev ? "" : opts);
     g_free(opts);
-    args = g_strjoinv(" ", argv);
-    qtest_start(args);
-    g_strfreev(argv);
-    g_free(args);
+    qtest_start(g_strjoinv(" ", argv));
     test_cmos();
     qtest_end();
 }
@@ -383,22 +372,18 @@ static void test_ide_device_user_chst(void)
  */
 static void test_ide_drive_cd_0(void)
 {
-    char **argv = g_new0(char *, ARGV_SIZE);
-    char *args;
+    char *argv[256];
     int argc, ide_idx;
     Backend i;
 
-    argc = setup_common(argv, ARGV_SIZE);
+    argc = setup_common(argv, ARRAY_SIZE(argv));
     for (i = 0; i <= backend_empty; i++) {
         ide_idx = backend_empty - i;
         cur_ide[ide_idx] = &hd_chst[i][mbr_blank];
-        argc = setup_ide(argc, argv, ARGV_SIZE,
+        argc = setup_ide(argc, argv, ARRAY_SIZE(argv),
                          ide_idx, NULL, i, mbr_blank, "");
     }
-    args = g_strjoinv(" ", argv);
-    qtest_start(args);
-    g_strfreev(argv);
-    g_free(args);
+    qtest_start(g_strjoinv(" ", argv));
     test_cmos();
     qtest_end();
 }
@@ -434,10 +419,7 @@ int main(int argc, char **argv)
     ret = g_test_run();
 
     for (i = 0; i < backend_last; i++) {
-        if (img_file_name[i]) {
-            unlink(img_file_name[i]);
-            free(img_file_name[i]);
-        }
+        unlink(img_file_name[i]);
     }
 
     return ret;

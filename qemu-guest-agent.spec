@@ -1,3 +1,6 @@
+# Build time setting
+%global SLOF_gittagdate 20140630
+
 %global have_usbredir 1
 %global have_spice    1
 %global have_fdt      0
@@ -55,11 +58,11 @@
 
 Summary: QEMU guest agent
 Name: qemu-guest-agent
-Version: 2.12.0
+Version: 2.5.0
 Release: 3%{?dist}
 # Epoch because we pushed a qemu-1.0 package. AIUI this can't ever be dropped
 Epoch: 10
-License: GPLv2
+License: GPLv2+ and LGPLv2+ and BSD
 Group: System Environment/Daemons
 URL: http://www.qemu.org/
 Requires(post): systemd-units
@@ -71,37 +74,99 @@ Requires(postun): systemd-units
     %define _smp_mflags %{nil}
 %endif
 
-Source0: http://wiki.qemu.org/download/qemu-2.12.0.tar.xz
+Source0: http://wiki.qemu.org/download/qemu-2.5.0.tar.bz2
 
 Source1: qemu-guest-agent.service
 Source2: 99-qemu-guest-agent.rules
 Source3: qemu-ga.sysconfig
 Source4: build_configure.sh
 
-# For bz#1567041 - qemu-guest-agent does not parse PCI bridge links in "build_guest_fsinfo_for_real_device" (q35)
-Patch1: qemuga-qemu-ga-make-get-fsinfo-work-over-pci-bridges.patch
-# For bz#1567041 - qemu-guest-agent does not parse PCI bridge links in "build_guest_fsinfo_for_real_device" (q35)
-Patch2: qemuga-qga-fix-driver-leak-in-guest-get-fsinfo.patch
-# For bz#1611062 - "virsh vcpucount --guest" fails after hotunplug a vcpu with intermediate order by "setvcpu"
-Patch3: qemuga-qga-ignore-non-present-cpus-when-handling-qmp_guest_.patch
-# For bz#1635571 - [RFE] Report disk device name and serial number (qemu-guest-agent on Linux)
-Patch5: qemuga-configure-add-test-for-libudev.patch
-# For bz#1635571 - [RFE] Report disk device name and serial number (qemu-guest-agent on Linux)
-Patch6: qemuga-qga-linux-report-disk-serial-number.patch
-# For bz#1635571 - [RFE] Report disk device name and serial number (qemu-guest-agent on Linux)
-Patch7: qemuga-qga-linux-return-disk-device-in-guest-get-fsinfo.patch
+Patch0001: 0001-Initial-redhat-build.patch
 
 BuildRequires: zlib-devel
-BuildRequires: glib2-devel
-BuildRequires: systemd
-BuildRequires: systemd-devel
+BuildRequires: SDL-devel
+BuildRequires: which
+BuildRequires: texi2html
+BuildRequires: gnutls-devel
+BuildRequires: cyrus-sasl-devel
+BuildRequires: libtool
+BuildRequires: libaio-devel
+BuildRequires: rsync
 BuildRequires: python
+BuildRequires: pciutils-devel
+BuildRequires: pulseaudio-libs-devel
+BuildRequires: libiscsi-devel
+BuildRequires: ncurses-devel
+BuildRequires: libattr-devel
+BuildRequires: libusbx-devel
+%if 0%{have_usbredir}
+BuildRequires: usbredir-devel >= 0.6
+%endif
+BuildRequires: texinfo
+%if 0%{have_spice}
+BuildRequires: spice-protocol >= 0.12.2
+BuildRequires: spice-server-devel >= 0.12.0
+%endif
+%if 0%{have_seccomp}
+BuildRequires: libseccomp-devel >= 1.0.0
+%endif
+# For network block driver
+BuildRequires: libcurl-devel
+BuildRequires: libssh2-devel
+%ifarch x86_64
+BuildRequires: librados2-devel
+BuildRequires: librbd1-devel
+%endif
+%if 0%{have_gluster}
+# For gluster block driver
+BuildRequires: glusterfs-api-devel
+BuildRequires: glusterfs-devel
+%endif
+# We need both because the 'stap' binary is probed for by configure
+BuildRequires: systemtap
 BuildRequires: systemtap-sdt-devel
+# For smartcard NSS support
+BuildRequires: nss-devel
+# For XFS discard support in raw-posix.c
+# For VNC JPEG support
+BuildRequires: libjpeg-devel
+# For VNC PNG support
+BuildRequires: libpng-devel
+# For uuid generation
+BuildRequires: libuuid-devel
+# For BlueZ device support
+BuildRequires: bluez-libs-devel
+# For Braille device support
+BuildRequires: brlapi-devel
+# For test suite
+BuildRequires: check-devel
+# For virtfs
+BuildRequires: libcap-devel
+# Hard requirement for version >= 1.3
+BuildRequires: pixman-devel
+# Documentation requirement
 BuildRequires: perl-podlators
 BuildRequires: texinfo
+# For rdma
+%if 0%{have_librdma}
+BuildRequires: librdmacm-devel
+%endif
 %if 0%{have_tcmalloc}
 BuildRequires: gperftools-devel
 %endif
+# iasl and cpp for acpi generation (not a hard requirement as we can use
+# pre-compiled files, but it's better to use this)
+%ifarch %{ix86} x86_64
+BuildRequires: iasl
+BuildRequires: cpp
+%endif
+# For compressed guest memory dumps
+BuildRequires: lzo-devel snappy-devel
+# For NUMA memory binding
+%if 0%{have_numa}
+BuildRequires: numactl-devel
+%endif
+BuildRequires: libcacard-devel
 
 %define qemudocdir %{_docdir}/%{pkgname}
 
@@ -125,12 +190,6 @@ This package does not need to be installed on the host OS.
 
 %prep
 %setup -q -n qemu-%{version}
-%patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
 
 # if patch fuzzy patch applying will be forbidden
 %define with_fuzzy_patches 0
@@ -169,6 +228,7 @@ ApplyOptionalPatch()
 }
 
 
+%patch0001 -p1
 
 ApplyOptionalPatch qemu-kvm-test.patch
 
@@ -200,6 +260,42 @@ cp %{SOURCE4} build_configure.sh
   "%{name}-%{version}-%{release}" \
   "%{optflags}" \
 %if 0%{have_fdt}
+  enable \
+%else
+  disable \
+%endif
+%if 0%{have_gluster}
+  enable \
+%else
+  disable \
+%endif
+  enable \
+%if 0%{have_numa}
+  enable \
+%else
+  disable \
+%endif
+%ifarch x86_64
+  enable \
+%else
+  disable \
+%endif
+%if 0%{have_librdma}
+  enable \
+%else
+  disable \
+%endif
+%if 0%{have_seccomp} 
+  enable \
+%else
+  disable \
+%endif
+%if 0%{have_spice}
+  enable \
+%else
+  disable \
+%endif
+%if 0%{have_usbredir}
   enable \
 %else
   disable \
@@ -272,38 +368,6 @@ install -m 0644  qemu-ga.8 ${RPM_BUILD_ROOT}%{_mandir}/man8/
 
 
 %changelog
-* Wed Dec 12 2018 Miroslav Rezanina <mrezanin@redhat.com> - 2.12.0-3.el7
-- qemuga-qga-ignore-non-present-cpus-when-handling-qmp_guest_.patch [bz#1611062]
-- qemuga-qemu-guest-agent.spec-add-systemd-devel-dependency.patch [bz#1635571]
-- qemuga-configure-add-test-for-libudev.patch [bz#1635571]
-- qemuga-qga-linux-report-disk-serial-number.patch [bz#1635571]
-- qemuga-qga-linux-return-disk-device-in-guest-get-fsinfo.patch [bz#1635571]
-- Resolves: bz#1611062
-  ("virsh vcpucount --guest" fails after hotunplug a vcpu with intermediate order by "setvcpu")
-- Resolves: bz#1635571
-  ([RFE] Report disk device name and serial number (qemu-guest-agent on Linux))
-
-* Tue Jul 24 2018 Miroslav Rezanina <mrezanin@redhat.com> - 2.12.0-2.el7
-- qemuga-qemu-ga-make-get-fsinfo-work-over-pci-bridges.patch [bz#1567041]
-- qemuga-qga-fix-driver-leak-in-guest-get-fsinfo.patch [bz#1567041]
-- Resolves: bz#1567041
-  (qemu-guest-agent does not parse PCI bridge links in "build_guest_fsinfo_for_real_device" (q35))
-
-* Wed May 02 2018 Miroslav Rezanina <mrezanin@redhat.com> - 2.12.0-1.el7
-- Rebase to 2.12.0 base [bz#1562218]
-- Resolves: bz#1562218
-  (Rebase qemu-guest-agent for RHEL-7.6)
-
-* Fri May 19 2017 Miroslav Rezanina <mrezanin@redhat.com> - 2.8.0-2.el7
-- qemuga-Remove-unnecessary-dependencies.patch [bz#1441999]
-- Resolves: bz#1441999
-  (Clean qemu-ga dependencies)
-
-* Tue Feb 07 2017 Miroslav Rezanina <mrezanin@redhat.com> - 2.8.0-1.el7
-- Rebase to 2.8.0 base [bz#1414676]
-- Resolves: bz#1414676
-  (Rebase qemu-guest-agent to 2.8.0 base)
-
 * Thu Sep 01 2016 Miroslav Rezanina <mrezanin@redhat.com> - 2.5.0-3.el7
 - qemuga-spec-add-qemu-ga-man-page.patch [bz#1101556]
 - Resolves: bz#1101556
@@ -318,6 +382,7 @@ install -m 0644  qemu-ga.8 ${RPM_BUILD_ROOT}%{_mandir}/man8/
 - Rebase to QEMU 2.5.0 [bz#1297673]
 - Resolves: bz#1297673
   (Rebase to QEMU 2.5)
+
 * Tue Aug 25 2015 Miroslav Rezanina <mrezanin@redhat.com> - 2.3.0-3.el7
 - qemuga-Do-not-stop-qemu-guest-agent-service-on-target-switc.patch [bz#1160930]
 - Resolves: bz#1160930

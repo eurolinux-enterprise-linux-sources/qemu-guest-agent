@@ -18,10 +18,10 @@
  *
  */
 
-#ifndef IMX_I2C_H
-#define IMX_I2C_H
+#ifndef __IMX_I2C_H_
+#define __IMX_I2C_H_
 
-#include "hw/sysbus.h"
+#include <hw/sysbus.h>
 
 #define TYPE_IMX_I2C "imx.i2c"
 #define IMX_I2C(obj) OBJECT_CHECK(IMXI2CState, (obj), TYPE_IMX_I2C)
@@ -84,4 +84,4 @@ typedef struct IMXI2CState {
     uint16_t i2dr_write;
 } IMXI2CState;
 
-#endif /* IMX_I2C_H */
+#endif /* __IMX_I2C_H_ */

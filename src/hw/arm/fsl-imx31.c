@@ -19,15 +19,11 @@
  *  with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
-#include "qemu-common.h"
-#include "cpu.h"
 #include "hw/arm/fsl-imx31.h"
 #include "sysemu/sysemu.h"
 #include "exec/address-spaces.h"
 #include "hw/boards.h"
-#include "chardev/char.h"
+#include "sysemu/char.h"
 
 static void fsl_imx31_init(Object *obj)
 {
@@ -39,7 +35,7 @@ static void fsl_imx31_init(Object *obj)
     object_initialize(&s->avic, sizeof(s->avic), TYPE_IMX_AVIC);
     qdev_set_parent_bus(DEVICE(&s->avic), sysbus_get_default());
 
-    object_initialize(&s->ccm, sizeof(s->ccm), TYPE_IMX31_CCM);
+    object_initialize(&s->ccm, sizeof(s->ccm), TYPE_IMX_CCM);
     qdev_set_parent_bus(DEVICE(&s->ccm), sysbus_get_default());
 
     for (i = 0; i < FSL_IMX31_NUM_UARTS; i++) {
@@ -47,7 +43,7 @@ static void fsl_imx31_init(Object *obj)
         qdev_set_parent_bus(DEVICE(&s->uart[i]), sysbus_get_default());
     }
 
-    object_initialize(&s->gpt, sizeof(s->gpt), TYPE_IMX31_GPT);
+    object_initialize(&s->gpt, sizeof(s->gpt), TYPE_IMX_GPT);
     qdev_set_parent_bus(DEVICE(&s->gpt), sysbus_get_default());
 
     for (i = 0; i < FSL_IMX31_NUM_EPITS; i++) {
@@ -107,14 +103,14 @@ static void fsl_imx31_realize(DeviceState *dev, Error **errp)
         };
 
         if (i < MAX_SERIAL_PORTS) {
-            Chardev *chr;
+            CharDriverState *chr;
 
             chr = serial_hds[i];
 
             if (!chr) {
                 char label[20];
                 snprintf(label, sizeof(label), "imx31.uart%d", i);
-                chr = qemu_chr_new(label, "null");
+                chr = qemu_chr_new(label, "null", NULL);
             }
 
             qdev_prop_set_chr(DEVICE(&s->uart[i]), "chardev", chr);
@@ -132,7 +128,7 @@ static void fsl_imx31_realize(DeviceState *dev, Error **errp)
                                             serial_table[i].irq));
     }
 
-    s->gpt.ccm = IMX_CCM(&s->ccm);
+    s->gpt.ccm = DEVICE(&s->ccm);
 
     object_property_set_bool(OBJECT(&s->gpt), true, "realized", &err);
     if (err) {
@@ -154,7 +150,7 @@ static void fsl_imx31_realize(DeviceState *dev, Error **errp)
             { FSL_IMX31_EPIT2_ADDR, FSL_IMX31_EPIT2_IRQ },
         };
 
-        s->epit[i].ccm = IMX_CCM(&s->ccm);
+        s->epit[i].ccm = DEVICE(&s->ccm);
 
         object_property_set_bool(OBJECT(&s->epit[i]), true, "realized", &err);
         if (err) {
@@ -219,8 +215,9 @@ static void fsl_imx31_realize(DeviceState *dev, Error **errp)
     }
 
     /* On a real system, the first 16k is a `secure boot rom' */
-    memory_region_init_rom(&s->secure_rom, NULL, "imx31.secure_rom",
-                           FSL_IMX31_SECURE_ROM_SIZE, &err);
+    memory_region_init_rom_device(&s->secure_rom, NULL, NULL, NULL,
+                                  "imx31.secure_rom",
+                                  FSL_IMX31_SECURE_ROM_SIZE, &err);
     if (err) {
         error_propagate(errp, err);
         return;
@@ -229,8 +226,8 @@ static void fsl_imx31_realize(DeviceState *dev, Error **errp)
                                 &s->secure_rom);
 
     /* There is also a 16k ROM */
-    memory_region_init_rom(&s->rom, NULL, "imx31.rom",
-                           FSL_IMX31_ROM_SIZE, &err);
+    memory_region_init_rom_device(&s->rom, NULL, NULL, NULL, "imx31.rom",
+                                  FSL_IMX31_ROM_SIZE, &err);
     if (err) {
         error_propagate(errp, err);
         return;
@@ -247,6 +244,7 @@ static void fsl_imx31_realize(DeviceState *dev, Error **errp)
     }
     memory_region_add_subregion(get_system_memory(), FSL_IMX31_IRAM_ADDR,
                                 &s->iram);
+    vmstate_register_ram_global(&s->iram);
 
     /* internal RAM (16 KB) is aliased over 256 MB - 16 KB */
     memory_region_init_alias(&s->iram_alias, NULL, "imx31.iram_alias",
@@ -260,12 +258,12 @@ static void fsl_imx31_class_init(ObjectClass *oc, void *data)
     DeviceClass *dc = DEVICE_CLASS(oc);
 
     dc->realize = fsl_imx31_realize;
-    dc->desc = "i.MX31 SOC";
+
     /*
-     * Reason: uses serial_hds in realize and the kzm board does not
-     * support multiple CPUs
+     * Reason: creates an ARM CPU, thus use after free(), see
+     * arm_cpu_class_init()
      */
-    dc->user_creatable = false;
+    dc->cannot_destroy_with_object_finalize_yet = true;
 }
 
 static const TypeInfo fsl_imx31_type_info = {

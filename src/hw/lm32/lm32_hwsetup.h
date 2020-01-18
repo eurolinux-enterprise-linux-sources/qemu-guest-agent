@@ -26,7 +26,6 @@
 #define QEMU_HW_LM32_HWSETUP_H
 
 #include "qemu-common.h"
-#include "qemu/cutils.h"
 #include "hw/loader.h"
 
 typedef struct {
@@ -75,7 +74,7 @@ static inline void hwsetup_create_rom(HWSetup *hw,
         hwaddr base)
 {
     rom_add_blob("hwsetup", hw->data, TARGET_PAGE_SIZE,
-                 TARGET_PAGE_SIZE, base, NULL, NULL, NULL, NULL, true);
+                 TARGET_PAGE_SIZE, base, NULL, NULL, NULL);
 }
 
 static inline void hwsetup_add_u8(HWSetup *hw, uint8_t u)

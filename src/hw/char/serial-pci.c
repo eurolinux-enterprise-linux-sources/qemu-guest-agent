@@ -25,8 +25,6 @@
 
 /* see docs/specs/pci-serial.txt */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "hw/char/serial.h"
 #include "hw/pci/pci.h"
 
@@ -250,10 +248,6 @@ static const TypeInfo serial_pci_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCISerialState),
     .class_init    = serial_pci_class_initfn,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static const TypeInfo multi_2x_serial_pci_info = {
@@ -261,10 +255,6 @@ static const TypeInfo multi_2x_serial_pci_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIMultiSerialState),
     .class_init    = multi_2x_serial_pci_class_initfn,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static const TypeInfo multi_4x_serial_pci_info = {
@@ -272,10 +262,6 @@ static const TypeInfo multi_4x_serial_pci_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIMultiSerialState),
     .class_init    = multi_4x_serial_pci_class_initfn,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void serial_pci_register_types(void)

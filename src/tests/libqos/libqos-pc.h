@@ -1,5 +1,5 @@
-#ifndef LIBQOS_PC_H
-#define LIBQOS_PC_H
+#ifndef __libqos_pc_h
+#define __libqos_pc_h
 
 #include "libqos/libqos.h"
 

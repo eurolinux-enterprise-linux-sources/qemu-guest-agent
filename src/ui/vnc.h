@@ -24,11 +24,10 @@
  * THE SOFTWARE.
  */
 
-#ifndef QEMU_VNC_H
-#define QEMU_VNC_H
+#ifndef __QEMU_VNC_H
+#define __QEMU_VNC_H
 
 #include "qemu-common.h"
-#include "qapi/qapi-types-ui.h"
 #include "qemu/queue.h"
 #include "qemu/thread.h"
 #include "ui/console.h"
@@ -36,14 +35,13 @@
 #include "qemu/bitmap.h"
 #include "crypto/tlssession.h"
 #include "qemu/buffer.h"
-#include "io/channel-socket.h"
-#include "io/channel-tls.h"
-#include "io/net-listener.h"
 #include <zlib.h>
+#include <stdbool.h>
 
 #include "keymaps.h"
 #include "vnc-palette.h"
 #include "vnc-enc-zrle.h"
+#include "qapi-types.h"
 
 // #define _VNC_DEBUG 1
 
@@ -147,15 +145,13 @@ struct VncDisplay
     int num_exclusive;
     int connections_limit;
     VncSharePolicy share_policy;
-    QIONetListener *listener;
-    QIONetListener *wslistener;
+    int lsock;
+    int lwebsock;
+    bool ws_enabled;
     DisplaySurface *ds;
     DisplayChangeListener dcl;
     kbd_layout_t *kbd_layout;
     int lock_key_sync;
-    QEMUPutLEDEntry *led;
-    int ledstate;
-    int key_delay_ms;
     QemuMutex mutex;
 
     QEMUCursor *cursor;
@@ -167,13 +163,14 @@ struct VncDisplay
 
     const char *id;
     QTAILQ_ENTRY(VncDisplay) next;
+    bool enabled;
     bool is_unix;
     char *password;
     time_t expires;
     int auth;
     int subauth; /* Used by VeNCrypt */
     int ws_auth; /* Used by websockets */
-    int ws_subauth; /* Used by websockets */
+    bool ws_tls; /* Used by websockets */
     bool lossy;
     bool non_adaptive;
     QCryptoTLSCreds *tlscreds;
@@ -249,34 +246,25 @@ struct VncJob
     QTAILQ_ENTRY(VncJob) next;
 };
 
-typedef enum {
-    VNC_STATE_UPDATE_NONE,
-    VNC_STATE_UPDATE_INCREMENTAL,
-    VNC_STATE_UPDATE_FORCE,
-} VncStateUpdate;
-
 struct VncState
 {
-    QIOChannelSocket *sioc; /* The underlying socket */
-    QIOChannel *ioc; /* The channel currently used for I/O */
-    guint ioc_tag;
-    gboolean disconnecting;
+    int csock;
 
     DECLARE_BITMAP(dirty[VNC_MAX_HEIGHT], VNC_DIRTY_BITS);
     uint8_t **lossy_rect; /* Not an Array to avoid costly memcpy in
                            * vnc-jobs-async.c */
 
     VncDisplay *vd;
-    VncStateUpdate update; /* Most recent pending request from client */
-    VncStateUpdate job_update; /* Currently processed by job thread */
+    int need_update;
+    int force_update;
     int has_dirty;
     uint32_t features;
     int absolute;
     int last_x;
     int last_y;
     uint32_t last_bmask;
-    size_t client_width; /* limited to u16 by RFB proto */
-    size_t client_height; /* limited to u16 by RFB proto */
+    int client_width;
+    int client_height;
     VncShareMode share_mode;
 
     uint32_t vnc_encoding;
@@ -287,7 +275,7 @@ struct VncState
     int auth;
     int subauth; /* Used by VeNCrypt */
     char challenge[VNC_AUTH_CHALLENGE_SIZE];
-    QCryptoTLSSession *tls; /* Borrowed pointer from channel, don't free */
+    QCryptoTLSSession *tls;
 #ifdef CONFIG_VNC_SASL
     VncStateSASL sasl;
 #endif
@@ -296,20 +284,12 @@ struct VncState
 
     VncClientInfo *info;
 
-    /* Job thread bottom half has put data for a forced update
-     * into the output buffer. This offset points to the end of
-     * the update data in the output buffer. This lets us determine
-     * when a force update is fully sent to the client, allowing
-     * us to process further forced updates. */
-    size_t force_update_offset;
-    /* We allow multiple incremental updates or audio capture
-     * samples to be queued in output buffer, provided the
-     * buffer size doesn't exceed this threshold. The value
-     * is calculating dynamically based on framebuffer size
-     * and audio sample settings in vnc_update_throttle_offset() */
-    size_t throttle_output_offset;
     Buffer output;
     Buffer input;
+    Buffer ws_input;
+    Buffer ws_output;
+    size_t ws_payload_remain;
+    WsMask ws_payload_mask;
     /* current output mode information */
     VncWritePixels *write_pixels;
     PixelFormat client_pf;
@@ -323,8 +303,10 @@ struct VncState
     size_t read_handler_expect;
     /* input */
     uint8_t modifiers_state[256];
+    QEMUPutLEDEntry *led;
 
     bool abort;
+    bool initialized;
     QemuMutex output_mutex;
     QEMUBH *bh;
     Buffer jobs_buffer;
@@ -517,12 +499,13 @@ enum {
  *****************************************************************************/
 
 /* Event loop functions */
-gboolean vnc_client_io(QIOChannel *ioc,
-                       GIOCondition condition,
-                       void *opaque);
+void vnc_client_read(void *opaque);
+void vnc_client_write(void *opaque);
 
-size_t vnc_client_read_buf(VncState *vs, uint8_t *data, size_t datalen);
-size_t vnc_client_write_buf(VncState *vs, const uint8_t *data, size_t datalen);
+ssize_t vnc_client_read_buf(VncState *vs, uint8_t *data, size_t datalen);
+ssize_t vnc_client_write_buf(VncState *vs, const uint8_t *data, size_t datalen);
+ssize_t vnc_tls_pull(char *buf, size_t len, void *opaque);
+ssize_t vnc_tls_push(const char *buf, size_t len, void *opaque);
 
 /* Protocol I/O functions */
 void vnc_write(VncState *vs, const void *data, size_t len);
@@ -533,7 +516,7 @@ void vnc_write_u8(VncState *vs, uint8_t value);
 void vnc_flush(VncState *vs);
 void vnc_read_when(VncState *vs, VncReadEvent *func, size_t expecting);
 void vnc_disconnect_finish(VncState *vs);
-void vnc_start_protocol(VncState *vs);
+void vnc_init_state(VncState *vs);
 
 
 /* Buffer I/O functions */
@@ -541,13 +524,16 @@ uint32_t read_u32(uint8_t *data, size_t offset);
 
 /* Protocol stage functions */
 void vnc_client_error(VncState *vs);
-size_t vnc_client_io_error(VncState *vs, ssize_t ret, Error **errp);
+ssize_t vnc_client_io_error(VncState *vs, ssize_t ret, int last_errno);
 
 void start_client_init(VncState *vs);
 void start_auth_vnc(VncState *vs);
 
 
 /* Misc helpers */
+
+char *vnc_socket_local_addr(const char *format, int fd);
+char *vnc_socket_remote_addr(const char *format, int fd);
 
 static inline uint32_t vnc_has_feature(VncState *vs, int feature) {
     return (vs->features & (1 << feature));
@@ -592,4 +578,4 @@ int vnc_zrle_send_framebuffer_update(VncState *vs, int x, int y, int w, int h);
 int vnc_zywrle_send_framebuffer_update(VncState *vs, int x, int y, int w, int h);
 void vnc_zrle_clear(VncState *vs);
 
-#endif /* QEMU_VNC_H */
+#endif /* __QEMU_VNC_H */

@@ -32,7 +32,7 @@
  * linked with -lutil.
  */
 
-#include "qemu/osdep.h"
+#include "config-host.h"
 #include "qemu-common.h"
 
 #if defined(__GLIBC__)

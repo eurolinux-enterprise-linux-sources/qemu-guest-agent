@@ -16,9 +16,6 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>
  */
-#include "qemu/osdep.h"
-#include "qemu-common.h"
-#include "cpu.h"
 #include "qemu/thread.h"
 #include "hw/i386/apic_internal.h"
 #include "hw/i386/apic.h"
@@ -28,9 +25,7 @@
 #include "trace.h"
 #include "hw/i386/pc.h"
 #include "hw/i386/apic-msidef.h"
-#include "qapi/error.h"
 
-#define MAX_APICS 255
 #define MAX_APIC_WORDS 8
 
 #define SYNC_FROM_VAPIC                 0x1
@@ -38,10 +33,6 @@
 #define SYNC_ISR_IRR_TO_VAPIC           0x4
 
 static APICCommonState *local_apics[MAX_APICS + 1];
-
-#define TYPE_APIC "apic"
-#define APIC(obj) \
-    OBJECT_CHECK(APICCommonState, (obj), TYPE_APIC)
 
 static void apic_set_irq(APICCommonState *s, int vector_num, int trigger_mode);
 static void apic_update_irq(APICCommonState *s);
@@ -167,7 +158,7 @@ static void apic_local_deliver(APICCommonState *s, int vector)
 
 void apic_deliver_pic_intr(DeviceState *dev, int level)
 {
-    APICCommonState *s = APIC(dev);
+    APICCommonState *s = APIC_COMMON(dev);
 
     if (level) {
         apic_local_deliver(s, APIC_LVT_LINT0);
@@ -305,18 +296,6 @@ static void apic_set_tpr(APICCommonState *s, uint8_t val)
     }
 }
 
-int apic_get_highest_priority_irr(DeviceState *dev)
-{
-    APICCommonState *s;
-
-    if (!dev) {
-        /* no interrupts */
-        return -1;
-    }
-    s = APIC_COMMON(dev);
-    return get_highest_priority_int(s->irr);
-}
-
 static uint8_t apic_get_tpr(APICCommonState *s)
 {
     apic_sync_vapic(s, SYNC_FROM_VAPIC);
@@ -389,7 +368,7 @@ static void apic_update_irq(APICCommonState *s)
 
 void apic_poll_irq(DeviceState *dev)
 {
-    APICCommonState *s = APIC(dev);
+    APICCommonState *s = APIC_COMMON(dev);
 
     apic_sync_vapic(s, SYNC_FROM_VAPIC);
     apic_update_irq(s);
@@ -437,7 +416,7 @@ static int apic_find_dest(uint8_t dest)
     int i;
 
     if (apic && apic->id == dest)
-        return dest;  /* shortcut in case apic->id == local_apics[dest]->id */
+        return dest;  /* shortcut in case apic->id == apic->idx */
 
     for (i = 0; i < MAX_APICS; i++) {
         apic = local_apics[i];
@@ -495,7 +474,7 @@ static void apic_startup(APICCommonState *s, int vector_num)
 
 void apic_sipi(DeviceState *dev)
 {
-    APICCommonState *s = APIC(dev);
+    APICCommonState *s = APIC_COMMON(dev);
 
     cpu_reset_interrupt(CPU(s->cpu), CPU_INTERRUPT_SIPI);
 
@@ -509,7 +488,7 @@ static void apic_deliver(DeviceState *dev, uint8_t dest, uint8_t dest_mode,
                          uint8_t delivery_mode, uint8_t vector_num,
                          uint8_t trigger_mode)
 {
-    APICCommonState *s = APIC(dev);
+    APICCommonState *s = APIC_COMMON(dev);
     uint32_t deliver_bitmask[MAX_APIC_WORDS];
     int dest_shorthand = (s->icr[0] >> 18) & 3;
     APICCommonState *apic_iter;
@@ -520,14 +499,14 @@ static void apic_deliver(DeviceState *dev, uint8_t dest, uint8_t dest_mode,
         break;
     case 1:
         memset(deliver_bitmask, 0x00, sizeof(deliver_bitmask));
-        apic_set_bit(deliver_bitmask, s->id);
+        apic_set_bit(deliver_bitmask, s->idx);
         break;
     case 2:
         memset(deliver_bitmask, 0xff, sizeof(deliver_bitmask));
         break;
     case 3:
         memset(deliver_bitmask, 0xff, sizeof(deliver_bitmask));
-        apic_reset_bit(deliver_bitmask, s->id);
+        apic_reset_bit(deliver_bitmask, s->idx);
         break;
     }
 
@@ -566,7 +545,7 @@ static bool apic_check_pic(APICCommonState *s)
 
 int apic_get_interrupt(DeviceState *dev)
 {
-    APICCommonState *s = APIC(dev);
+    APICCommonState *s = APIC_COMMON(dev);
     int intno;
 
     /* if the APIC is installed or enabled, we let the 8259 handle the
@@ -600,7 +579,7 @@ int apic_get_interrupt(DeviceState *dev)
 
 int apic_accept_pic_intr(DeviceState *dev)
 {
-    APICCommonState *s = APIC(dev);
+    APICCommonState *s = APIC_COMMON(dev);
     uint32_t lvt0;
 
     if (!s)
@@ -679,7 +658,7 @@ static uint32_t apic_mem_readl(void *opaque, hwaddr addr)
     if (!dev) {
         return 0;
     }
-    s = APIC(dev);
+    s = APIC_COMMON(dev);
 
     index = (addr >> 4) & 0xff;
     switch(index) {
@@ -752,10 +731,8 @@ static uint32_t apic_mem_readl(void *opaque, hwaddr addr)
     return val;
 }
 
-static void apic_send_msi(MSIMessage *msi)
+static void apic_send_msi(hwaddr addr, uint32_t data)
 {
-    uint64_t addr = msi->address;
-    uint32_t data = msi->data;
     uint8_t dest = (addr & MSI_ADDR_DEST_ID_MASK) >> MSI_ADDR_DEST_ID_SHIFT;
     uint8_t vector = (data & MSI_DATA_VECTOR_MASK) >> MSI_DATA_VECTOR_SHIFT;
     uint8_t dest_mode = (addr >> MSI_ADDR_DEST_MODE_SHIFT) & 0x1;
@@ -776,8 +753,7 @@ static void apic_mem_writel(void *opaque, hwaddr addr, uint32_t val)
          * APIC is connected directly to the CPU.
          * Mapping them on the global bus happens to work because
          * MSI registers are reserved in APIC MMIO and vice versa. */
-        MSIMessage msi = { .address = addr, .data = val };
-        apic_send_msi(&msi);
+        apic_send_msi(addr, val);
         return;
     }
 
@@ -785,7 +761,7 @@ static void apic_mem_writel(void *opaque, hwaddr addr, uint32_t val)
     if (!dev) {
         return;
     }
-    s = APIC(dev);
+    s = APIC_COMMON(dev);
 
     trace_apic_mem_writel(addr, val);
 
@@ -889,30 +865,15 @@ static const MemoryRegionOps apic_io_ops = {
 
 static void apic_realize(DeviceState *dev, Error **errp)
 {
-    APICCommonState *s = APIC(dev);
-
-    if (s->id >= MAX_APICS) {
-        error_setg(errp, "%s initialization failed. APIC ID %d is invalid",
-                   object_get_typename(OBJECT(dev)), s->id);
-        return;
-    }
+    APICCommonState *s = APIC_COMMON(dev);
 
     memory_region_init_io(&s->io_memory, OBJECT(s), &apic_io_ops, s, "apic-msi",
                           APIC_SPACE_SIZE);
 
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, apic_timer, s);
-    local_apics[s->id] = s;
+    local_apics[s->idx] = s;
 
-    msi_nonbroken = true;
-}
-
-static void apic_unrealize(DeviceState *dev, Error **errp)
-{
-    APICCommonState *s = APIC(dev);
-
-    timer_del(s->timer);
-    timer_free(s->timer);
-    local_apics[s->id] = NULL;
+    msi_supported = true;
 }
 
 static void apic_class_init(ObjectClass *klass, void *data)
@@ -920,7 +881,6 @@ static void apic_class_init(ObjectClass *klass, void *data)
     APICCommonClass *k = APIC_COMMON_CLASS(klass);
 
     k->realize = apic_realize;
-    k->unrealize = apic_unrealize;
     k->set_base = apic_set_base;
     k->set_tpr = apic_set_tpr;
     k->get_tpr = apic_get_tpr;
@@ -928,11 +888,10 @@ static void apic_class_init(ObjectClass *klass, void *data)
     k->external_nmi = apic_external_nmi;
     k->pre_save = apic_pre_save;
     k->post_load = apic_post_load;
-    k->send_msi = apic_send_msi;
 }
 
 static const TypeInfo apic_info = {
-    .name          = TYPE_APIC,
+    .name          = "apic",
     .instance_size = sizeof(APICCommonState),
     .parent        = TYPE_APIC_COMMON,
     .class_init    = apic_class_init,

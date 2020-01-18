@@ -13,9 +13,19 @@
  *
  */
 
-#include "qemu/osdep.h"
+#include "config-host.h"
 
+#include <stdio.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <glib.h>
 
+#include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>

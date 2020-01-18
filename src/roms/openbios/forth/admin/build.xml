@@ -16,7 +16,6 @@
   <object source="iocontrol.fs"/>
   <object source="banner.fs"/>
   <object source="reset.fs"/>
-  <object source="power.fs"/>
   <object source="script.fs"/>
   <object source="security.fs"/>
   <object source="selftest.fs"/>

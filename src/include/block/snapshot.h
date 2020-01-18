@@ -25,6 +25,9 @@
 #ifndef SNAPSHOT_H
 #define SNAPSHOT_H
 
+#include "qemu-common.h"
+#include "qapi/error.h"
+#include "qemu/option.h"
 
 
 #define SNAPSHOT_OPT_BASE       "snapshot."
@@ -55,8 +58,7 @@ int bdrv_can_snapshot(BlockDriverState *bs);
 int bdrv_snapshot_create(BlockDriverState *bs,
                          QEMUSnapshotInfo *sn_info);
 int bdrv_snapshot_goto(BlockDriverState *bs,
-                       const char *snapshot_id,
-                       Error **errp);
+                       const char *snapshot_id);
 int bdrv_snapshot_delete(BlockDriverState *bs,
                          const char *snapshot_id,
                          const char *name,
@@ -82,8 +84,7 @@ int bdrv_snapshot_load_tmp_by_id_or_name(BlockDriverState *bs,
 bool bdrv_all_can_snapshot(BlockDriverState **first_bad_bs);
 int bdrv_all_delete_snapshot(const char *name, BlockDriverState **first_bsd_bs,
                              Error **err);
-int bdrv_all_goto_snapshot(const char *name, BlockDriverState **first_bad_bs,
-                           Error **errp);
+int bdrv_all_goto_snapshot(const char *name, BlockDriverState **first_bsd_bs);
 int bdrv_all_find_snapshot(const char *name, BlockDriverState **first_bad_bs);
 int bdrv_all_create_snapshot(QEMUSnapshotInfo *sn,
                              BlockDriverState *vm_state_bs,

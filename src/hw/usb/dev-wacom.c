@@ -25,7 +25,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "ui/console.h"
 #include "hw/usb.h"
@@ -329,7 +328,7 @@ static void usb_wacom_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void usb_wacom_unrealize(USBDevice *dev, Error **errp)
+static void usb_wacom_handle_destroy(USBDevice *dev)
 {
     USBWacomState *s = (USBWacomState *) dev;
 
@@ -364,7 +363,7 @@ static void usb_wacom_class_init(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_wacom_handle_reset;
     uc->handle_control = usb_wacom_handle_control;
     uc->handle_data    = usb_wacom_handle_data;
-    uc->unrealize      = usb_wacom_unrealize;
+    uc->handle_destroy = usb_wacom_handle_destroy;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
     dc->desc = "QEMU PenPartner Tablet";
     dc->vmsd = &vmstate_usb_wacom;

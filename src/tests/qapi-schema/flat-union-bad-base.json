@@ -1,4 +1,5 @@
-# we allow anonymous base, but enforce no duplicate keys
+# we require the base to be an existing struct
+# TODO: should we allow an anonymous inline base type?
 { 'enum': 'TestEnum',
   'data': [ 'value1', 'value2' ] }
 { 'struct': 'TestTypeA',
@@ -6,7 +7,7 @@
 { 'struct': 'TestTypeB',
   'data': { 'integer': 'int' } }
 { 'union': 'TestUnion',
-  'base': { 'enum1': 'TestEnum', 'string': 'str' },
+  'base': { 'enum1': 'TestEnum', 'kind': 'str' },
   'discriminator': 'enum1',
   'data': { 'value1': 'TestTypeA',
             'value2': 'TestTypeB' } }

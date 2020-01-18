@@ -20,7 +20,7 @@
 
 #define OF_MALLOC_BASE		((char*)OFMEM + ALIGN_SIZE(sizeof(ofmem_t), 8))
 
-#define MEMSIZE (192 * 1024)
+#define MEMSIZE (128 * 1024)
 static union {
 	char memory[MEMSIZE];
 	ofmem_t ofmem;
@@ -62,17 +62,19 @@ ucell ofmem_arch_get_heap_top(void)
 
 ucell ofmem_arch_get_virt_top(void)
 {
-	return (ucell)OFMEM_VIRT_TOP;
+	return (ucell)TOP_OF_RAM;
 }
 
 ucell ofmem_arch_get_iomem_base(void)
 {
-	return (ucell)&_iomem;
+	/* Currently unused */
+	return 0;
 }
 
 ucell ofmem_arch_get_iomem_top(void)
 {
-	return (ucell)&_iomem + 0x8000;
+	/* Currently unused */
+	return 0;
 }
 
 retain_t *ofmem_arch_get_retained(void)
@@ -213,7 +215,7 @@ ucell ofmem_arch_default_translation_mode( phys_addr_t phys )
 ucell ofmem_arch_io_translation_mode( phys_addr_t phys )
 {
 	/* Writable, privileged and not locked */
-	return SPITFIRE_TTE_CV | SPITFIRE_TTE_WRITABLE | SPITFIRE_TTE_PRIVILEGED | SPITFIRE_TTE_EFFECT;
+	return SPITFIRE_TTE_CV | SPITFIRE_TTE_WRITABLE | SPITFIRE_TTE_PRIVILEGED;
 }
 
 /* Architecture-specific OFMEM helpers */

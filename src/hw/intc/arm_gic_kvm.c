@@ -19,16 +19,26 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
-#include "qemu-common.h"
-#include "cpu.h"
 #include "hw/sysbus.h"
-#include "migration/blocker.h"
+#include "migration/migration.h"
 #include "sysemu/kvm.h"
 #include "kvm_arm.h"
 #include "gic_internal.h"
 #include "vgic_common.h"
+
+//#define DEBUG_GIC_KVM
+
+#ifdef DEBUG_GIC_KVM
+static const int debug_gic_kvm = 1;
+#else
+static const int debug_gic_kvm = 0;
+#endif
+
+#define DPRINTF(fmt, ...) do { \
+        if (debug_gic_kvm) { \
+            printf("arm_gic: " fmt , ## __VA_ARGS__); \
+        } \
+    } while (0)
 
 #define TYPE_KVM_ARM_GIC "kvm-arm-gic"
 #define KVM_ARM_GIC(obj) \
@@ -100,14 +110,14 @@ static void kvm_gicd_access(GICState *s, int offset, int cpu,
                             uint32_t *val, bool write)
 {
     kvm_device_access(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_DIST_REGS,
-                      KVM_VGIC_ATTR(offset, cpu), val, write, &error_abort);
+                      KVM_VGIC_ATTR(offset, cpu), val, write);
 }
 
 static void kvm_gicc_access(GICState *s, int offset, int cpu,
                             uint32_t *val, bool write)
 {
     kvm_device_access(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_CPU_REGS,
-                      KVM_VGIC_ATTR(offset, cpu), val, write, &error_abort);
+                      KVM_VGIC_ATTR(offset, cpu), val, write);
 }
 
 #define for_each_irq_reg(_ctr, _max_irq, _field_width) \
@@ -510,17 +520,6 @@ static void kvm_arm_gic_realize(DeviceState *dev, Error **errp)
         return;
     }
 
-    if (!kvm_arm_gic_can_save_restore(s)) {
-        error_setg(&s->migration_blocker, "This operating system kernel does "
-                                          "not support vGICv2 migration");
-        migrate_add_blocker(s->migration_blocker, &local_err);
-        if (local_err) {
-            error_propagate(errp, local_err);
-            error_free(s->migration_blocker);
-            return;
-        }
-    }
-
     gic_init_irqs_and_mmio(s, kvm_arm_gicv2_set_irq, NULL);
 
     for (i = 0; i < s->num_irq - GIC_INTERNAL; i++) {
@@ -538,14 +537,13 @@ static void kvm_arm_gic_realize(DeviceState *dev, Error **errp)
         if (kvm_device_check_attr(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_NR_IRQS, 0)) {
             uint32_t numirqs = s->num_irq;
             kvm_device_access(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_NR_IRQS, 0,
-                              &numirqs, true, &error_abort);
+                              &numirqs, true);
         }
         /* Tell the kernel to complete VGIC initialization now */
         if (kvm_device_check_attr(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_CTRL,
                                   KVM_DEV_ARM_VGIC_CTRL_INIT)) {
             kvm_device_access(s->dev_fd, KVM_DEV_ARM_VGIC_GRP_CTRL,
-                              KVM_DEV_ARM_VGIC_CTRL_INIT, NULL, true,
-                              &error_abort);
+                              KVM_DEV_ARM_VGIC_CTRL_INIT, NULL, true);
         }
     } else if (ret != -ENODEV && ret != -ENOTSUP) {
         error_setg_errno(errp, -ret, "error creating in-kernel VGIC");
@@ -570,16 +568,10 @@ static void kvm_arm_gic_realize(DeviceState *dev, Error **errp)
                             KVM_VGIC_V2_ADDR_TYPE_CPU,
                             s->dev_fd);
 
-    if (kvm_has_gsi_routing()) {
-        /* set up irq routing */
-        kvm_init_irq_routing(kvm_state);
-        for (i = 0; i < s->num_irq - GIC_INTERNAL; ++i) {
-            kvm_irqchip_add_irq_route(kvm_state, i, 0, i);
-        }
-
-        kvm_gsi_routing_allowed = true;
-
-        kvm_irqchip_commit_routes(kvm_state);
+    if (!kvm_arm_gic_can_save_restore(s)) {
+        error_setg(&s->migration_blocker, "This operating system kernel does "
+                                          "not support vGICv2 migration");
+        migrate_add_blocker(s->migration_blocker);
     }
 }
 
@@ -591,9 +583,10 @@ static void kvm_arm_gic_class_init(ObjectClass *klass, void *data)
 
     agcc->pre_save = kvm_arm_gic_get;
     agcc->post_load = kvm_arm_gic_put;
-    device_class_set_parent_realize(dc, kvm_arm_gic_realize,
-                                    &kgc->parent_realize);
-    device_class_set_parent_reset(dc, kvm_arm_gic_reset, &kgc->parent_reset);
+    kgc->parent_realize = dc->realize;
+    kgc->parent_reset = dc->reset;
+    dc->realize = kvm_arm_gic_realize;
+    dc->reset = kvm_arm_gic_reset;
 }
 
 static const TypeInfo kvm_arm_gic_info = {

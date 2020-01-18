@@ -22,12 +22,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "ui/console.h"
 #include "hw/usb.h"
 #include "hw/usb/desc.h"
-#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "hw/input/hid.h"
 
@@ -144,7 +142,7 @@ static const USBDescIface desc_iface_tablet = {
     .bInterfaceNumber              = 0,
     .bNumEndpoints                 = 1,
     .bInterfaceClass               = USB_CLASS_HID,
-    .bInterfaceProtocol            = 0x00,
+    .bInterfaceProtocol            = 0x02,
     .ndesc                         = 1,
     .descs = (USBDescOther[]) {
         {
@@ -174,7 +172,7 @@ static const USBDescIface desc_iface_tablet2 = {
     .bInterfaceNumber              = 0,
     .bNumEndpoints                 = 1,
     .bInterfaceClass               = USB_CLASS_HID,
-    .bInterfaceProtocol            = 0x00,
+    .bInterfaceProtocol            = 0x02,
     .ndesc                         = 1,
     .descs = (USBDescOther[]) {
         {
@@ -487,7 +485,7 @@ static const uint8_t qemu_mouse_hid_report_descriptor[] = {
 
 static const uint8_t qemu_tablet_hid_report_descriptor[] = {
     0x05, 0x01,		/* Usage Page (Generic Desktop) */
-    0x09, 0x02,		/* Usage (Mouse) */
+    0x09, 0x01,		/* Usage (Pointer) */
     0xa1, 0x01,		/* Collection (Application) */
     0x09, 0x01,		/*   Usage (Pointer) */
     0xa1, 0x00,		/*   Collection (Physical) */
@@ -690,7 +688,7 @@ static void usb_hid_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void usb_hid_unrealize(USBDevice *dev, Error **errp)
+static void usb_hid_handle_destroy(USBDevice *dev)
 {
     USBHIDState *us = USB_HID(dev);
 
@@ -785,7 +783,7 @@ static void usb_hid_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_hid_handle_reset;
     uc->handle_control = usb_hid_handle_control;
     uc->handle_data    = usb_hid_handle_data;
-    uc->unrealize      = usb_hid_unrealize;
+    uc->handle_destroy = usb_hid_handle_destroy;
     uc->handle_attach  = usb_desc_attach;
 }
 

@@ -18,12 +18,10 @@
 
 #ifndef NAND_IO
 
-#include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/block/flash.h"
+# include "hw/hw.h"
+# include "hw/block/flash.h"
 #include "sysemu/block-backend.h"
 #include "hw/qdev.h"
-#include "qapi/error.h"
 #include "qemu/error-report.h"
 
 # define NAND_CMD_READ0		0x00
@@ -321,17 +319,15 @@ static void nand_command(NANDFlashState *s)
         break;
 
     default:
-        printf("%s: Unknown NAND command 0x%02x\n", __func__, s->cmd);
+        printf("%s: Unknown NAND command 0x%02x\n", __FUNCTION__, s->cmd);
     }
 }
 
-static int nand_pre_save(void *opaque)
+static void nand_pre_save(void *opaque)
 {
     NANDFlashState *s = NAND(opaque);
 
     s->ioaddr_vmstate = s->ioaddr - s->io;
-
-    return 0;
 }
 
 static int nand_post_load(void *opaque, int version_id)
@@ -375,8 +371,6 @@ static void nand_realize(DeviceState *dev, Error **errp)
 {
     int pagesize;
     NANDFlashState *s = NAND(dev);
-    int ret;
-
 
     s->buswidth = nand_flash_ids[s->chip_id].width >> 3;
     s->size = nand_flash_ids[s->chip_id].size << 20;
@@ -409,11 +403,6 @@ static void nand_realize(DeviceState *dev, Error **errp)
     if (s->blk) {
         if (blk_is_read_only(s->blk)) {
             error_setg(errp, "Can't use a read-only drive");
-            return;
-        }
-        ret = blk_set_perm(s->blk, BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
-                           BLK_PERM_ALL, errp);
-        if (ret < 0) {
             return;
         }
         if (blk_getlength(s->blk) >=
@@ -640,13 +629,13 @@ DeviceState *nand_init(BlockBackend *blk, int manf_id, int chip_id)
     DeviceState *dev;
 
     if (nand_flash_ids[chip_id].size == 0) {
-        hw_error("%s: Unsupported NAND chip ID.\n", __func__);
+        hw_error("%s: Unsupported NAND chip ID.\n", __FUNCTION__);
     }
     dev = DEVICE(object_new(TYPE_NAND));
     qdev_prop_set_uint8(dev, "manufacturer_id", manf_id);
     qdev_prop_set_uint8(dev, "chip_id", chip_id);
     if (blk) {
-        qdev_prop_set_drive(dev, "drive", blk, &error_fatal);
+        qdev_prop_set_drive_nofail(dev, "drive", blk);
     }
 
     qdev_init_nofail(dev);
@@ -672,8 +661,7 @@ static void glue(nand_blk_write_, PAGE_SIZE)(NANDFlashState *s)
         sector = SECTOR(s->addr);
         off = (s->addr & PAGE_MASK) + s->offset;
         soff = SECTOR_OFFSET(s->addr);
-        if (blk_pread(s->blk, sector << BDRV_SECTOR_BITS, iobuf,
-                      PAGE_SECTORS << BDRV_SECTOR_BITS) < 0) {
+        if (blk_read(s->blk, sector, iobuf, PAGE_SECTORS) < 0) {
             printf("%s: read error in sector %" PRIu64 "\n", __func__, sector);
             return;
         }
@@ -685,24 +673,21 @@ static void glue(nand_blk_write_, PAGE_SIZE)(NANDFlashState *s)
                             MIN(OOB_SIZE, off + s->iolen - PAGE_SIZE));
         }
 
-        if (blk_pwrite(s->blk, sector << BDRV_SECTOR_BITS, iobuf,
-                       PAGE_SECTORS << BDRV_SECTOR_BITS, 0) < 0) {
+        if (blk_write(s->blk, sector, iobuf, PAGE_SECTORS) < 0) {
             printf("%s: write error in sector %" PRIu64 "\n", __func__, sector);
         }
     } else {
         off = PAGE_START(s->addr) + (s->addr & PAGE_MASK) + s->offset;
         sector = off >> 9;
         soff = off & 0x1ff;
-        if (blk_pread(s->blk, sector << BDRV_SECTOR_BITS, iobuf,
-                      (PAGE_SECTORS + 2) << BDRV_SECTOR_BITS) < 0) {
+        if (blk_read(s->blk, sector, iobuf, PAGE_SECTORS + 2) < 0) {
             printf("%s: read error in sector %" PRIu64 "\n", __func__, sector);
             return;
         }
 
         mem_and(iobuf + soff, s->io, s->iolen);
 
-        if (blk_pwrite(s->blk, sector << BDRV_SECTOR_BITS, iobuf,
-                       (PAGE_SECTORS + 2) << BDRV_SECTOR_BITS, 0) < 0) {
+        if (blk_write(s->blk, sector, iobuf, PAGE_SECTORS + 2) < 0) {
             printf("%s: write error in sector %" PRIu64 "\n", __func__, sector);
         }
     }
@@ -729,20 +714,17 @@ static void glue(nand_blk_erase_, PAGE_SIZE)(NANDFlashState *s)
         i = SECTOR(addr);
         page = SECTOR(addr + (1 << (ADDR_SHIFT + s->erase_shift)));
         for (; i < page; i ++)
-            if (blk_pwrite(s->blk, i << BDRV_SECTOR_BITS, iobuf,
-                           BDRV_SECTOR_SIZE, 0) < 0) {
+            if (blk_write(s->blk, i, iobuf, 1) < 0) {
                 printf("%s: write error in sector %" PRIu64 "\n", __func__, i);
             }
     } else {
         addr = PAGE_START(addr);
         page = addr >> 9;
-        if (blk_pread(s->blk, page << BDRV_SECTOR_BITS, iobuf,
-                      BDRV_SECTOR_SIZE) < 0) {
+        if (blk_read(s->blk, page, iobuf, 1) < 0) {
             printf("%s: read error in sector %" PRIu64 "\n", __func__, page);
         }
         memset(iobuf + (addr & 0x1ff), 0xff, (~addr & 0x1ff) + 1);
-        if (blk_pwrite(s->blk, page << BDRV_SECTOR_BITS, iobuf,
-                       BDRV_SECTOR_SIZE, 0) < 0) {
+        if (blk_write(s->blk, page, iobuf, 1) < 0) {
             printf("%s: write error in sector %" PRIu64 "\n", __func__, page);
         }
 
@@ -750,20 +732,18 @@ static void glue(nand_blk_erase_, PAGE_SIZE)(NANDFlashState *s)
         i = (addr & ~0x1ff) + 0x200;
         for (addr += ((PAGE_SIZE + OOB_SIZE) << s->erase_shift) - 0x200;
                         i < addr; i += 0x200) {
-            if (blk_pwrite(s->blk, i, iobuf, BDRV_SECTOR_SIZE, 0) < 0) {
+            if (blk_write(s->blk, i >> 9, iobuf, 1) < 0) {
                 printf("%s: write error in sector %" PRIu64 "\n",
                        __func__, i >> 9);
             }
         }
 
         page = i >> 9;
-        if (blk_pread(s->blk, page << BDRV_SECTOR_BITS, iobuf,
-                      BDRV_SECTOR_SIZE) < 0) {
+        if (blk_read(s->blk, page, iobuf, 1) < 0) {
             printf("%s: read error in sector %" PRIu64 "\n", __func__, page);
         }
         memset(iobuf, 0xff, ((addr - 1) & 0x1ff) + 1);
-        if (blk_pwrite(s->blk, page << BDRV_SECTOR_BITS, iobuf,
-                       BDRV_SECTOR_SIZE, 0) < 0) {
+        if (blk_write(s->blk, page, iobuf, 1) < 0) {
             printf("%s: write error in sector %" PRIu64 "\n", __func__, page);
         }
     }
@@ -778,8 +758,7 @@ static void glue(nand_blk_load_, PAGE_SIZE)(NANDFlashState *s,
 
     if (s->blk) {
         if (s->mem_oob) {
-            if (blk_pread(s->blk, SECTOR(addr) << BDRV_SECTOR_BITS, s->io,
-                          PAGE_SECTORS << BDRV_SECTOR_BITS) < 0) {
+            if (blk_read(s->blk, SECTOR(addr), s->io, PAGE_SECTORS) < 0) {
                 printf("%s: read error in sector %" PRIu64 "\n",
                                 __func__, SECTOR(addr));
             }
@@ -788,8 +767,8 @@ static void glue(nand_blk_load_, PAGE_SIZE)(NANDFlashState *s,
                             OOB_SIZE);
             s->ioaddr = s->io + SECTOR_OFFSET(s->addr) + offset;
         } else {
-            if (blk_pread(s->blk, PAGE_START(addr), s->io,
-                          (PAGE_SECTORS + 2) << BDRV_SECTOR_BITS) < 0) {
+            if (blk_read(s->blk, PAGE_START(addr) >> 9,
+                         s->io, (PAGE_SECTORS + 2)) < 0) {
                 printf("%s: read error in sector %" PRIu64 "\n",
                                 __func__, PAGE_START(addr) >> 9);
             }

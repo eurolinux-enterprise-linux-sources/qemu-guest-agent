@@ -167,7 +167,7 @@ struct ide_drive {
 
 struct ide_channel {
 
-	phandle_t ph;
+	char name[32];
 	struct ide_channel *next;
 
 	/*

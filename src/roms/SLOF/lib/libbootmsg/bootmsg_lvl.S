@@ -58,8 +58,10 @@ ENTRY(bootmsg_cp)
 	bl      io_putchar      // print character
 	mr	r3, r9
 	bl      io_printhex16   // print checkpoint ID
-	li      r3,'\r'
-	bl      io_putchar      // go back
+	.rept   5
+	li      r3,'\b'
+	bl      io_putchar      // print backspaces
+	.endr
 	mtlr	r11
 	blr
 

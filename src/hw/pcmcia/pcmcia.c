@@ -4,7 +4,6 @@
  * Copyright 2013 SUSE LINUX Products GmbH
  */
 
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "hw/hw.h"
 #include "hw/pcmcia.h"

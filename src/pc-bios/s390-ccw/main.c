@@ -8,19 +8,13 @@
  * directory.
  */
 
-#include "libc.h"
 #include "s390-ccw.h"
 #include "virtio.h"
 
 char stack[PAGE_SIZE * 8] __attribute__((__aligned__(PAGE_SIZE)));
-static SubChannelId blk_schid = { .one = 1 };
-IplParameterBlock iplb __attribute__((__aligned__(PAGE_SIZE)));
-static char loadparm[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-QemuIplParameters qipl;
-
-#define LOADPARM_PROMPT "PROMPT  "
-#define LOADPARM_EMPTY  "........"
-#define BOOT_MENU_FLAG_MASK (QIPL_FLAG_BM_OPTS_CMD | QIPL_FLAG_BM_OPTS_ZIPL)
+char ring_area[PAGE_SIZE * 8] __attribute__((__aligned__(PAGE_SIZE)));
+uint64_t boot_value;
+static struct subchannel_id blk_schid = { .one = 1 };
 
 /*
  * Priniciples of Operations (SA22-7832-09) chapter 17 requires that
@@ -29,26 +23,22 @@ QemuIplParameters qipl;
  */
 void write_subsystem_identification(void)
 {
-    SubChannelId *schid = (SubChannelId *) 184;
+    struct subchannel_id *schid = (struct subchannel_id *) 184;
     uint32_t *zeroes = (uint32_t *) 188;
 
     *schid = blk_schid;
     *zeroes = 0;
 }
 
-void panic(const char *string)
+
+void virtio_panic(const char *string)
 {
     sclp_print(string);
     disabled_wait();
     while (1) { }
 }
 
-unsigned int get_loadparm_index(void)
-{
-    return atoui(loadparm);
-}
-
-static bool find_dev(Schib *schib, int dev_no)
+static bool find_dev(struct schib *schib, int dev_no)
 {
     int i, r;
 
@@ -61,13 +51,7 @@ static bool find_dev(Schib *schib, int dev_no)
         if (!schib->pmcw.dnv) {
             continue;
         }
-        if (!virtio_is_supported(blk_schid)) {
-            continue;
-        }
-        /* Skip net devices since no IPLB is created and therefore no
-         * no network bootloader has been loaded
-         */
-        if (virtio_get_device_type() == VIRTIO_ID_NET && dev_no < 0) {
+        if (!virtio_is_blk(blk_schid)) {
             continue;
         }
         if ((dev_no < 0) || (schib->pmcw.dev == dev_no)) {
@@ -78,36 +62,12 @@ static bool find_dev(Schib *schib, int dev_no)
     return false;
 }
 
-static void menu_setup(void)
+static void virtio_setup(uint64_t dev_info)
 {
-    if (memcmp(loadparm, LOADPARM_PROMPT, 8) == 0) {
-        menu_set_parms(QIPL_FLAG_BM_OPTS_CMD, 0);
-        return;
-    }
-
-    /* If loadparm was set to any other value, then do not enable menu */
-    if (memcmp(loadparm, LOADPARM_EMPTY, 8) != 0) {
-        return;
-    }
-
-    switch (iplb.pbt) {
-    case S390_IPL_TYPE_CCW:
-    case S390_IPL_TYPE_QEMU_SCSI:
-        menu_set_parms(qipl.qipl_flags & BOOT_MENU_FLAG_MASK,
-                       qipl.boot_menu_timeout);
-        return;
-    }
-}
-
-static void virtio_setup(void)
-{
-    Schib schib;
+    struct schib schib;
     int ssid;
     bool found = false;
     uint16_t dev_no;
-    char ldp[] = "LOADPARM=[________]\n";
-    VDev *vdev = virtio_get_device();
-    QemuIplParameters *early_qipl = (QemuIplParameters *)QIPL_ADDRESS;
 
     /*
      * We unconditionally enable mss support. In every sane configuration,
@@ -116,33 +76,12 @@ static void virtio_setup(void)
      */
     enable_mss_facility();
 
-    sclp_get_loadparm_ascii(loadparm);
-    memcpy(ldp + 10, loadparm, 8);
-    sclp_print(ldp);
-
-    memcpy(&qipl, early_qipl, sizeof(QemuIplParameters));
-
-    if (store_iplb(&iplb)) {
-        switch (iplb.pbt) {
-        case S390_IPL_TYPE_CCW:
-            dev_no = iplb.ccw.devno;
-            debug_print_int("device no. ", dev_no);
-            blk_schid.ssid = iplb.ccw.ssid & 0x3;
-            debug_print_int("ssid ", blk_schid.ssid);
-            found = find_dev(&schib, dev_no);
-            break;
-        case S390_IPL_TYPE_QEMU_SCSI:
-            vdev->scsi_device_selected = true;
-            vdev->selected_scsi_device.channel = iplb.scsi.channel;
-            vdev->selected_scsi_device.target = iplb.scsi.target;
-            vdev->selected_scsi_device.lun = iplb.scsi.lun;
-            blk_schid.ssid = iplb.scsi.ssid & 0x3;
-            found = find_dev(&schib, iplb.scsi.devno);
-            break;
-        default:
-            panic("List-directed IPL not supported yet!\n");
-        }
-        menu_setup();
+    if (dev_info != -1) {
+        dev_no = dev_info & 0xffff;
+        debug_print_int("device no. ", dev_no);
+        blk_schid.ssid = (dev_info >> 16) & 0x3;
+        debug_print_int("ssid ", blk_schid.ssid);
+        found = find_dev(&schib, dev_no);
     } else {
         for (ssid = 0; ssid < 0x3; ssid++) {
             blk_schid.ssid = ssid;
@@ -153,25 +92,25 @@ static void virtio_setup(void)
         }
     }
 
-    IPL_assert(found, "No virtio device found");
+    if (!found) {
+        virtio_panic("No virtio-blk device found!\n");
+    }
 
-    if (virtio_get_device_type() == VIRTIO_ID_NET) {
-        sclp_print("Network boot device detected\n");
-        vdev->netboot_start_addr = qipl.netboot_start_addr;
-    } else {
-        virtio_blk_setup_device(blk_schid);
+    virtio_setup_block(blk_schid);
 
-        IPL_assert(virtio_ipl_disk_is_valid(), "No valid IPL device detected");
+    if (!virtio_ipl_disk_is_valid()) {
+        virtio_panic("No valid hard disk detected.\n");
     }
 }
 
 int main(void)
 {
     sclp_setup();
-    virtio_setup();
+    debug_print_int("boot reg[7] ", boot_value);
+    virtio_setup(boot_value);
 
     zipl_load(); /* no return */
 
-    panic("Failed to load OS from hard disk\n");
+    virtio_panic("Failed to load OS from hard disk\n");
     return 0; /* make compiler happy */
 }

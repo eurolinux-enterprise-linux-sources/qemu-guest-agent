@@ -43,7 +43,7 @@
 	// FIXME: fake
 	typedef enum { CMD} reg;
 
-	extern enum {
+	enum {
 		NumberDownstreamPorts = 1<<0,
 		PowerSwitchingMode = 1<<8,
 		NoPowerSwitching = 1<<9,
@@ -53,17 +53,17 @@
 		PowerOnToPowerGoodTime = 1<<24
 	} HcRhDescriptorAReg;
 
-	extern enum {
+	enum {
 		NumberDownstreamPortsMask = MASK(0, 8),
 		PowerOnToPowerGoodTimeMask = MASK(24, 8)
 	} HcRhDescriptorAMask;
 
-	extern enum {
+	enum {
 		DeviceRemovable = 1<<0,
 		PortPowerControlMask = 1<<16
 	} HcRhDescriptorBReg;
 
-	extern enum {
+	enum {
 		CurrentConnectStatus		= 1<<0,
 		PortEnableStatus		= 1<<1,
 		PortSuspendStatus		= 1<<2,
@@ -77,7 +77,7 @@
 		PortOverCurrentIndicatorChange	= 1<<19,
 		PortResetStatusChange		= 1<<20
 	} HcRhPortStatusRead;
-	extern enum {
+	enum {
 		ClearPortEnable			= 1<<0,
 		SetPortEnable			= 1<<1,
 		SetPortSuspend			= 1<<2,
@@ -87,7 +87,7 @@
 		ClearPortPower			= 1<<9,
 	} HcRhPortStatusSet;
 
-	extern enum {
+	enum {
 		LocalPowerStatus = 1<<0,
 		OverCurrentIndicator = 1<<1,
 		DeviceRemoteWakeupEnable = 1<<15,
@@ -96,18 +96,18 @@
 		ClearRemoteWakeupEnable = 1<<31
 	} HcRhStatusReg;
 
-	extern enum {
+	enum {
 		FrameInterval = 1<<0,
 		FSLargestDataPacket = 1<<16,
 		FrameIntervalToggle = 1<<31
 	} HcFmIntervalOffset;
-	extern enum {
+	enum {
 		FrameIntervalMask = MASK(0, 14),
 		FSLargestDataPacketMask = MASK(16, 15),
 		FrameIntervalToggleMask = MASK(31, 1)
 	} HcFmIntervalMask;
 
-	extern enum {
+	enum {
 		ControlBulkServiceRatio = 1<<0,
 		PeriodicListEnable = 1<<2,
 		IsochronousEnable = 1<<3,
@@ -119,7 +119,7 @@
 		RemoteWakeupEnable = 1<<10
 	} HcControlReg;
 
-	extern enum {
+	enum {
 		ControlBulkServiceRatioMask = MASK(0, 2),
 		HostControllerFunctionalStateMask = MASK(6, 2)
 	} HcControlMask;
@@ -131,7 +131,7 @@
 		USBSuspend = 3*HostControllerFunctionalState
 	};
 
-	extern enum {
+	enum {
 		HostControllerReset = 1<<0,
 		ControlListFilled = 1<<1,
 		BulkListFilled = 1<<2,
@@ -139,16 +139,16 @@
 		SchedulingOverrunCount = 1<<16
 	} HcCommandStatusReg;
 
-	extern enum {
+	enum {
 		SchedulingOverrunCountMask = MASK(16, 2)
 	} HcCommandStatusMask;
 
-	extern enum {
+	enum {
 		FrameRemaining = 1<<0,
 		FrameRemainingToggle = 1<<31
 	} HcFmRemainingReg;
 
-	extern enum {
+	enum {
 		SchedulingOverrung = 1<<0,
 		WritebackDoneHead = 1<<1,
 		StartofFrame = 1<<2,

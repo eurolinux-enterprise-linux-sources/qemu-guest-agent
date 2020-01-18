@@ -17,7 +17,6 @@
  * 02110-1301, USA.
  */
 
-#define FILE_LICENCE(...) extern void __file_licence ( void )
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -28,7 +27,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <getopt.h>
-#include <ipxe/efi/Uefi.h>
+#include <ipxe/efi/efi.h>
 #include <ipxe/efi/IndustryStandard/PeImage.h>
 #include <ipxe/efi/IndustryStandard/Pci22.h>
 
@@ -81,11 +80,9 @@ static void read_pe_info ( void *pe, uint16_t *machine,
 	*machine = nt->nt32.FileHeader.Machine;
 	switch ( *machine ) {
 	case EFI_IMAGE_MACHINE_IA32:
-	case EFI_IMAGE_MACHINE_ARMTHUMB_MIXED:
 		*subsystem = nt->nt32.OptionalHeader.Subsystem;
 		break;
 	case EFI_IMAGE_MACHINE_X64:
-	case EFI_IMAGE_MACHINE_AARCH64:
 		*subsystem = nt->nt64.OptionalHeader.Subsystem;
 		break;
 	default:

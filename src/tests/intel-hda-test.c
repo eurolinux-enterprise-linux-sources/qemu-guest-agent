@@ -7,8 +7,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
+#include <string.h>
 #include "libqtest.h"
+#include "qemu/osdep.h"
 
 #define HDA_ID "hda0"
 #define CODEC_DEVICES " -device hda-output,bus=" HDA_ID ".0" \
@@ -31,9 +33,13 @@ static void ich9_test(void)
 
 int main(int argc, char **argv)
 {
+    int ret;
+
     g_test_init(&argc, &argv, NULL);
     qtest_add_func("/intel-hda/ich6", ich6_test);
     qtest_add_func("/intel-hda/ich9", ich9_test);
 
-    return g_test_run();
+    ret = g_test_run();
+
+    return ret;
 }

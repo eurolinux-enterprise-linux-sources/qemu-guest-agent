@@ -15,7 +15,9 @@
 #include "std/disk.h" // DISK_RET_SUCCESS
 #include "string.h" // memset
 #include "util.h" // cdrom_prepboot
-#include "tcgbios.h" // tpm_*
+
+// Locks for removable devices
+u8 CDRom_locks[BUILD_MAX_EXTDRIVE] VARLOW;
 
 
 /****************************************************************
@@ -31,7 +33,7 @@ cdemu_read(struct disk_op_s *op)
 {
     struct drive_s *drive_gf = GET_LOW(emulated_drive_gf);
     struct disk_op_s dop;
-    dop.drive_fl = drive_gf;
+    dop.drive_gf = drive_gf;
     dop.command = op->command;
     dop.lba = GET_LOW(CDEmu.ilba) + op->lba / 4;
 
@@ -86,7 +88,7 @@ cdemu_read(struct disk_op_s *op)
 }
 
 int
-cdemu_process_op(struct disk_op_s *op)
+process_cdemu_op(struct disk_op_s *op)
 {
     if (!CONFIG_CDROM_EMU)
         return 0;
@@ -97,8 +99,13 @@ cdemu_process_op(struct disk_op_s *op)
     case CMD_WRITE:
     case CMD_FORMAT:
         return DISK_RET_EWRITEPROTECT;
+    case CMD_VERIFY:
+    case CMD_RESET:
+    case CMD_SEEK:
+    case CMD_ISREADY:
+        return DISK_RET_SUCCESS;
     default:
-        return default_process_op(op);
+        return DISK_RET_EPARAM;
     }
 }
 
@@ -115,6 +122,7 @@ cdrom_prepboot(void)
     struct drive_s *drive = malloc_fseg(sizeof(*drive));
     if (!drive) {
         warn_noalloc();
+        free(drive);
         return;
     }
     cdemu_drive_gf = drive;
@@ -136,8 +144,8 @@ cdrom_boot(struct drive_s *drive)
     struct disk_op_s dop;
     int cdid = getDriveId(EXTTYPE_CD, drive);
     memset(&dop, 0, sizeof(dop));
-    dop.drive_fl = drive;
-    if (!dop.drive_fl || cdid < 0)
+    dop.drive_gf = drive;
+    if (!dop.drive_gf || cdid < 0)
         return 1;
 
     int ret = scsi_is_ready(&dop);
@@ -150,7 +158,7 @@ cdrom_boot(struct drive_s *drive)
     dop.lba = 0x11;
     dop.count = 1;
     dop.buf_fl = buffer;
-    ret = process_op(&dop);
+    ret = scsi_process_op(&dop);
     if (ret)
         return 3;
 
@@ -166,7 +174,7 @@ cdrom_boot(struct drive_s *drive)
     // And we read the Boot Catalog
     dop.lba = lba;
     dop.count = 1;
-    ret = process_op(&dop);
+    ret = scsi_process_op(&dop);
     if (ret)
         return 7;
 
@@ -183,9 +191,6 @@ cdrom_boot(struct drive_s *drive)
     // Initial/Default Entry
     if (buffer[0x20] != 0x88)
         return 11; // Bootable
-
-    /* measure 2048 bytes (one sector) */
-    tpm_add_cdrom_catalog(MAKE_FLATPTR(GET_SEG(SS), buffer), sizeof(buffer));
 
     // Fill in el-torito cdrom emulation fields.
     emulated_drive_gf = drive;
@@ -215,7 +220,7 @@ cdrom_boot(struct drive_s *drive)
         if (count > 64*1024/CDROM_SECTOR_SIZE)
             count = 64*1024/CDROM_SECTOR_SIZE;
         dop.count = count;
-        ret = process_op(&dop);
+        ret = scsi_process_op(&dop);
         if (ret)
             return 12;
         nbsectors -= count;

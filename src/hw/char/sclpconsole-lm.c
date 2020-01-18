@@ -13,11 +13,10 @@
  *
  */
 
-#include "qemu/osdep.h"
 #include "hw/qdev.h"
 #include "qemu/thread.h"
 #include "qemu/error-report.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 
 #include "hw/s390x/sclp.h"
 #include "hw/s390x/event-facility.h"
@@ -37,16 +36,12 @@ typedef struct OprtnsCommand {
 
 typedef struct SCLPConsoleLM {
     SCLPEvent event;
-    CharBackend chr;
+    CharDriverState *chr;
     bool echo;                  /* immediate echo of input if true        */
     uint32_t write_errors;      /* errors writing to char layer           */
     uint32_t length;            /* length of byte stream in buffer        */
     uint8_t buf[SIZE_CONSOLE_BUFFER];
 } SCLPConsoleLM;
-
-#define TYPE_SCLPLM_CONSOLE "sclplmconsole"
-#define SCLPLM_CONSOLE(obj) \
-    OBJECT_CHECK(SCLPConsoleLM, (obj), TYPE_SCLPLM_CONSOLE)
 
 /*
 *  Character layer call-back functions
@@ -89,9 +84,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
     scon->buf[scon->length] = *buf;
     scon->length += 1;
     if (scon->echo) {
-        /* XXX this blocks entire thread. Rewrite to use
-         * qemu_chr_fe_write and background I/O callbacks */
-        qemu_chr_fe_write_all(&scon->chr, buf, size);
+        qemu_chr_fe_write(scon->chr, buf, size);
     }
 }
 
@@ -102,12 +95,12 @@ static bool can_handle_event(uint8_t type)
     return type == SCLP_EVENT_MESSAGE || type == SCLP_EVENT_PMSGCMD;
 }
 
-static sccb_mask_t send_mask(void)
+static unsigned int send_mask(void)
 {
     return SCLP_EVENT_MASK_OP_CMD | SCLP_EVENT_MASK_PMSGCMD;
 }
 
-static sccb_mask_t receive_mask(void)
+static unsigned int receive_mask(void)
 {
     return SCLP_EVENT_MASK_MSG | SCLP_EVENT_MASK_PMSGCMD;
 }
@@ -122,7 +115,7 @@ static int get_console_data(SCLPEvent *event, uint8_t *buf, size_t *size,
 {
     int len;
 
-    SCLPConsoleLM *cons = SCLPLM_CONSOLE(event);
+    SCLPConsoleLM *cons = DO_UPCAST(SCLPConsoleLM, event, event);
 
     len = cons->length;
     /* data need to fit into provided SCLP buffer */
@@ -193,16 +186,31 @@ static int read_event_data(SCLPEvent *event, EventBufferHeader *evt_buf_hdr,
  */
 static int write_console_data(SCLPEvent *event, const uint8_t *buf, int len)
 {
-    SCLPConsoleLM *scon = SCLPLM_CONSOLE(event);
+    int ret = 0;
+    const uint8_t *buf_offset;
 
-    if (!qemu_chr_fe_backend_connected(&scon->chr)) {
+    SCLPConsoleLM *scon = DO_UPCAST(SCLPConsoleLM, event, event);
+
+    if (!scon->chr) {
         /* If there's no backend, we can just say we consumed all data. */
         return len;
     }
 
-    /* XXX this blocks entire thread. Rewrite to use
-     * qemu_chr_fe_write and background I/O callbacks */
-    return qemu_chr_fe_write_all(&scon->chr, buf, len);
+    buf_offset = buf;
+    while (len > 0) {
+        ret = qemu_chr_fe_write(scon->chr, buf, len);
+        if (ret == 0) {
+            /* a pty doesn't seem to be connected - no error */
+            len = 0;
+        } else if (ret == -EAGAIN || (ret > 0 && ret < len)) {
+            len -= ret;
+            buf_offset += ret;
+        } else {
+            len = 0;
+        }
+    }
+
+    return ret;
 }
 
 static int process_mdb(SCLPEvent *event, MDBO *mdbo)
@@ -235,7 +243,7 @@ static int write_event_data(SCLPEvent *event, EventBufferHeader *ebh)
     int errors = 0;
     MDBO *mdbo;
     SclpMsg *data = (SclpMsg *) ebh;
-    SCLPConsoleLM *scon = SCLPLM_CONSOLE(event);
+    SCLPConsoleLM *scon = DO_UPCAST(SCLPConsoleLM, event, event);
 
     len = be16_to_cpu(data->mdb.header.length);
     if (len < sizeof(data->mdb.header)) {
@@ -304,7 +312,7 @@ static int console_init(SCLPEvent *event)
 {
     static bool console_available;
 
-    SCLPConsoleLM *scon = SCLPLM_CONSOLE(event);
+    SCLPConsoleLM *scon = DO_UPCAST(SCLPConsoleLM, event, event);
 
     if (console_available) {
         error_report("Multiple line-mode operator consoles are not supported");
@@ -312,16 +320,22 @@ static int console_init(SCLPEvent *event)
     }
     console_available = true;
 
-    qemu_chr_fe_set_handlers(&scon->chr, chr_can_read,
-                             chr_read, NULL, NULL, scon, NULL, true);
+    if (scon->chr) {
+        qemu_chr_add_handlers(scon->chr, chr_can_read, chr_read, NULL, scon);
+    }
 
+    return 0;
+}
+
+static int console_exit(SCLPEvent *event)
+{
     return 0;
 }
 
 static void console_reset(DeviceState *dev)
 {
    SCLPEvent *event = SCLP_EVENT(dev);
-   SCLPConsoleLM *scon = SCLPLM_CONSOLE(event);
+   SCLPConsoleLM *scon = DO_UPCAST(SCLPConsoleLM, event, event);
 
    event->event_pending = false;
    scon->length = 0;
@@ -344,6 +358,7 @@ static void console_class_init(ObjectClass *klass, void *data)
     dc->reset = console_reset;
     dc->vmsd = &vmstate_sclplmconsole;
     ec->init = console_init;
+    ec->exit = console_exit;
     ec->get_send_mask = send_mask;
     ec->get_receive_mask = receive_mask;
     ec->can_handle_event = can_handle_event;

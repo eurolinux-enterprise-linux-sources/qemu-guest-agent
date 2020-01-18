@@ -17,10 +17,7 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qemu/error-report.h"
 #include "qemu-common.h"
-#include "qemu/host-utils.h"
 #include "hw/bt.h"
 
 struct bt_l2cap_sdp_state_s {
@@ -507,7 +504,7 @@ static void bt_l2cap_sdp_sdu_in(void *opaque, const uint8_t *data, int len)
     int rsp_len = 0;
 
     if (len < 5) {
-        error_report("%s: short SDP PDU (%iB).", __func__, len);
+        fprintf(stderr, "%s: short SDP PDU (%iB).\n", __FUNCTION__, len);
         return;
     }
 
@@ -518,8 +515,8 @@ static void bt_l2cap_sdp_sdu_in(void *opaque, const uint8_t *data, int len)
     len -= 5;
 
     if (len != plen) {
-        error_report("%s: wrong SDP PDU length (%iB != %iB).",
-                        __func__, plen, len);
+        fprintf(stderr, "%s: wrong SDP PDU length (%iB != %iB).\n",
+                        __FUNCTION__, plen, len);
         err = SDP_INVALID_PDU_SIZE;
         goto respond;
     }
@@ -545,8 +542,8 @@ static void bt_l2cap_sdp_sdu_in(void *opaque, const uint8_t *data, int len)
     case SDP_SVC_SEARCH_RSP:
     case SDP_SVC_SEARCH_ATTR_RSP:
     default:
-        error_report("%s: unexpected SDP PDU ID %02x.",
-                        __func__, pdu_id);
+        fprintf(stderr, "%s: unexpected SDP PDU ID %02x.\n",
+                        __FUNCTION__, pdu_id);
         err = SDP_INVALID_SYNTAX;
         break;
     }
@@ -581,7 +578,7 @@ static void bt_l2cap_sdp_close_ch(void *opaque)
     int i;
 
     for (i = 0; i < sdp->services; i ++) {
-        g_free(sdp->service_list[i].attribute_list[0].pair);
+        g_free(sdp->service_list[i].attribute_list->pair);
         g_free(sdp->service_list[i].attribute_list);
         g_free(sdp->service_list[i].uuid);
     }
@@ -721,8 +718,6 @@ static void sdp_service_record_build(struct sdp_service_record_s *record,
         len += sdp_attr_max_size(&def->attributes[record->attributes ++].data,
                         &record->uuids);
     }
-
-    assert(len > 0);
     record->uuids = pow2ceil(record->uuids);
     record->attribute_list =
             g_malloc0(record->attributes * sizeof(*record->attribute_list));
@@ -733,14 +728,12 @@ static void sdp_service_record_build(struct sdp_service_record_s *record,
     record->attributes = 0;
     uuid = record->uuid;
     while (def->attributes[record->attributes].data.type) {
-        int attribute_id = def->attributes[record->attributes].id;
         record->attribute_list[record->attributes].pair = data;
-        record->attribute_list[record->attributes].attribute_id = attribute_id;
 
         len = 0;
         data[len ++] = SDP_DTYPE_UINT | SDP_DSIZE_2;
-        data[len ++] = attribute_id >> 8;
-        data[len ++] = attribute_id & 0xff;
+        data[len ++] = def->attributes[record->attributes].id >> 8;
+        data[len ++] = def->attributes[record->attributes].id & 0xff;
         len += sdp_attr_write(data + len,
                         &def->attributes[record->attributes].data, &uuid);
 
@@ -754,15 +747,10 @@ static void sdp_service_record_build(struct sdp_service_record_s *record,
         data += len;
     }
 
-    /* Sort the attribute list by the AttributeID.  The first must be
-     * SDP_ATTR_RECORD_HANDLE so that bt_l2cap_sdp_close_ch can free
-     * the buffer.
-     */
+    /* Sort the attribute list by the AttributeID */
     qsort(record->attribute_list, record->attributes,
                     sizeof(*record->attribute_list),
                     (void *) sdp_attributeid_compare);
-    assert(record->attribute_list[0].pair == data);
-
     /* Sort the searchable UUIDs list for bisection */
     qsort(record->uuid, record->uuids,
                     sizeof(*record->uuid),

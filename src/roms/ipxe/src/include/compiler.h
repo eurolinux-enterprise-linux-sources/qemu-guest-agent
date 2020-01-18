@@ -52,17 +52,6 @@
 /** Stringify expanded argument */
 #define _S2( x ) _S1 ( x )
 
-/* Assembler section types */
-#ifdef ASSEMBLY
-#define PROGBITS _C2 ( ASM_TCHAR, progbits )
-#define NOBITS _C2 ( ASM_TCHAR, nobits )
-#else
-#define PROGBITS_OPS _S2 ( ASM_TCHAR_OPS ) "progbits"
-#define PROGBITS _S2 ( ASM_TCHAR ) "progbits"
-#define NOBITS_OPS _S2 ( ASM_TCHAR_OPS ) "nobits"
-#define NOBITS _S2 ( ASM_TCHAR ) "nobits"
-#endif
-
 /**
  * @defgroup symmacros Macros to provide or require explicit symbols
  * @{
@@ -75,7 +64,7 @@
  */
 #ifdef ASSEMBLY
 #define PROVIDE_SYMBOL( symbol )				\
-	.section ".provided", "a", NOBITS ;			\
+	.section ".provided", "a", @nobits ;			\
 	.hidden symbol ;					\
 	.globl	symbol ;					\
 	symbol: ;						\
@@ -150,14 +139,14 @@
  */
 #ifdef ASSEMBLY
 #define PROVIDE_REQUIRING_SYMBOL()				\
-	.section ".tbl.requiring_symbols", "a", PROGBITS ;	\
+	.section ".tbl.requiring_symbols", "a", @progbits ;	\
 	__requiring_symbol__:	.byte 0 ;			\
 	.size __requiring_symbol__, . - __requiring_symbol__ ;	\
 	.previous
 #else
 #define PROVIDE_REQUIRING_SYMBOL()				\
 	__asm__ ( ".section \".tbl.requiring_symbols\", "	\
-		  "         \"a\", " PROGBITS "\n"		\
+		  "         \"a\", @progbits\n"			\
 		  "__requiring_symbol__:\t.byte 0\n"		\
 		  ".size __requiring_symbol__, "		\
 		  "      . - __requiring_symbol__\n"		\
@@ -270,10 +259,6 @@ PROVIDE_SYMBOL ( OBJECT_SYMBOL );
 #define DBGLVL_MAX 0
 #endif
 
-#ifndef DBGLVL_DFLT
-#define DBGLVL_DFLT DBGLVL_MAX
-#endif
-
 #ifndef ASSEMBLY
 
 /** printf() for debugging */
@@ -289,23 +274,14 @@ extern void dbg_pause ( void );
 extern void dbg_more ( void );
 
 /* Allow for selective disabling of enabled debug levels */
-#define __debug_disable( object ) _C2 ( __debug_disable_, object )
-char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
-#define DBG_DISABLE_OBJECT( object, level ) do {		\
-	extern char __debug_disable(object);			\
-	__debug_disable(object) |= (level);			\
-	} while ( 0 )
-#define DBG_ENABLE_OBJECT( object, level ) do {			\
-	extern char __debug_disable(object);			\
-	__debug_disable(object) &= ~(level);			\
-	} while ( 0 )
 #if DBGLVL_MAX
-#define DBGLVL ( DBGLVL_MAX & ~__debug_disable(OBJECT) )
+int __debug_disable;
+#define DBGLVL ( DBGLVL_MAX & ~__debug_disable )
 #define DBG_DISABLE( level ) do {				\
-	__debug_disable(OBJECT) |= ( (level) & DBGLVL_MAX );	\
+	__debug_disable |= (level);				\
 	} while ( 0 )
 #define DBG_ENABLE( level ) do {				\
-	__debug_disable(OBJECT) &= ~( (level) & DBGLVL_MAX );	\
+	__debug_disable &= ~(level);				\
 	} while ( 0 )
 #else
 #define DBGLVL 0
@@ -403,7 +379,7 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
  *
  * @v level		Debug level
  */
-#define DBG_PAUSE_IF( level, ... ) do {				\
+#define DBG_PAUSE_IF( level ) do {				\
 		if ( DBG_ ## level ) {				\
 			dbg_pause();				\
 		}						\
@@ -414,7 +390,7 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
  *
  * @v level		Debug level
  */
-#define DBG_MORE_IF( level, ... ) do {				\
+#define DBG_MORE_IF( level ) do {				\
 		if ( DBG_ ## level ) {				\
 			dbg_more();				\
 		}						\
@@ -653,13 +629,6 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
  */
 #ifndef ASSEMBLY
 #define barrier() __asm__ __volatile__ ( "" : : : "memory" )
-#endif /* ASSEMBLY */
-
-/**
- * Array size
- */
-#ifndef ASSEMBLY
-#define ARRAY_SIZE(array) ( sizeof (array) / sizeof ( (array)[0] ) )
 #endif /* ASSEMBLY */
 
 /**

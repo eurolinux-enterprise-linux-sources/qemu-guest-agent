@@ -23,7 +23,8 @@ FALSE VALUE initialized?
 
 INSTANCE VARIABLE deblocker
 
-virtio-setup-vd VALUE virtiodev
+/vd-len BUFFER: virtiodev
+virtiodev virtio-setup-vd
 
 \ Quiesce the virtqueue of this device so that no more background
 \ transactions can be pending.
@@ -47,15 +48,6 @@ virtio-setup-vd VALUE virtiodev
 \ Read multiple blocks - called by deblocker package
 : read-blocks  ( addr block# #blocks -- #read )
    virtiodev virtio-blk-read
-;
-
-: write-blocks  ( addr block# #blocks -- #written )
-    \ Do not allow writes to the partition table (GPT is in first 34 sectors)
-    over 22 < IF
-        ." virtio-blk ERROR: Write access to partition table is not allowed." cr
-        3drop 0 EXIT
-    THEN
-    virtiodev virtio-blk-write
 ;
 
 \ Standard node "open" function
@@ -86,10 +78,6 @@ virtio-setup-vd VALUE virtiodev
 \ Standard node "read" function
 : read  ( addr len -- actual )
    s" read" deblocker @ $call-method
-;
-
-: write ( addr len -- actual )
-    s" write" deblocker @ $call-method
 ;
 
 \ Set disk alias if none is set yet

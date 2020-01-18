@@ -7,9 +7,8 @@
  * This file is licensed under GNU GPL.
  */
 
-#include "qemu/osdep.h"
+#include "hw/hw.h"
 #include "hw/i2c/i2c.h"
-#include "hw/audio/wm8750.h"
 #include "audio/audio.h"
 
 #define IN_PORT_N	3
@@ -24,6 +23,7 @@ typedef struct {
     int dac_hz;
 } WMRate;
 
+#define TYPE_WM8750 "wm8750"
 #define WM8750(obj) OBJECT_CHECK(WM8750State, (obj), TYPE_WM8750)
 
 typedef struct WM8750State {
@@ -302,7 +302,7 @@ static void wm8750_reset(I2CSlave *i2c)
     s->i2c_len = 0;
 }
 
-static int wm8750_event(I2CSlave *i2c, enum i2c_event event)
+static void wm8750_event(I2CSlave *i2c, enum i2c_event event)
 {
     WM8750State *s = WM8750(i2c);
 
@@ -314,14 +314,12 @@ static int wm8750_event(I2CSlave *i2c, enum i2c_event event)
 #ifdef VERBOSE
         if (s->i2c_len < 2)
             printf("%s: message too short (%i bytes)\n",
-                            __func__, s->i2c_len);
+                            __FUNCTION__, s->i2c_len);
 #endif
         break;
     default:
         break;
     }
-
-    return 0;
 }
 
 #define WM8750_LINVOL	0x00
@@ -554,7 +552,7 @@ static int wm8750_tx(I2CSlave *i2c, uint8_t data)
 
 #ifdef VERBOSE
     default:
-        printf("%s: unknown register %02x\n", __func__, cmd);
+        printf("%s: unknown register %02x\n", __FUNCTION__, cmd);
 #endif
     }
 
@@ -566,13 +564,11 @@ static int wm8750_rx(I2CSlave *i2c)
     return 0x00;
 }
 
-static int wm8750_pre_save(void *opaque)
+static void wm8750_pre_save(void *opaque)
 {
     WM8750State *s = opaque;
 
     s->rate_vmstate = s->rate - wm_rate_table;
-
-    return 0;
 }
 
 static int wm8750_post_load(void *opaque, int version_id)
@@ -638,7 +634,8 @@ static void wm8750_fini(I2CSlave *i2c)
 }
 #endif
 
-void wm8750_data_req_set(DeviceState *dev, data_req_cb *data_req, void *opaque)
+void wm8750_data_req_set(DeviceState *dev,
+                void (*data_req)(void *, int, int), void *opaque)
 {
     WM8750State *s = WM8750(dev);
 
@@ -680,12 +677,8 @@ uint32_t wm8750_adc_dat(void *opaque)
     WM8750State *s = (WM8750State *) opaque;
     uint32_t *data;
 
-    if (s->idx_in >= sizeof(s->data_in)) {
+    if (s->idx_in >= sizeof(s->data_in))
         wm8750_in_load(s);
-        if (s->idx_in >= sizeof(s->data_in)) {
-            return 0x80008000; /* silence in AUD_FMT_S16 sample format */
-        }
-    }
 
     data = (uint32_t *) &s->data_in[s->idx_in];
     s->req_in -= 4;

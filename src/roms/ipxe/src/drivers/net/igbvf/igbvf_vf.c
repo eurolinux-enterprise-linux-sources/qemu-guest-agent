@@ -357,7 +357,6 @@ s32 igbvf_promisc_set_vf(struct e1000_hw *hw, enum e1000_promisc_type type)
 		break;
 	case e1000_promisc_enabled:
 		msgbuf |= E1000_VF_SET_PROMISC_MULTICAST;
-		/* Fall through */
 	case e1000_promisc_unicast:
 		msgbuf |= E1000_VF_SET_PROMISC_UNICAST;
 	case e1000_promisc_disabled:

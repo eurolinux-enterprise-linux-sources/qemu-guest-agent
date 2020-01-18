@@ -1,8 +1,5 @@
-object q_empty
-enum QType ['none', 'qnull', 'qnum', 'qstring', 'qdict', 'qlist', 'qbool']
-    prefix QTYPE
-module indented-expr.json
+object :empty
 command eins None -> None
-   gen=True success_response=True boxed=False oob=False
+   gen=True success_response=True
 command zwei None -> None
-   gen=True success_response=True boxed=False oob=False
+   gen=True success_response=True

@@ -10,6 +10,8 @@
  *     IBM Corporation - initial implementation
  *****************************************************************************/
 #include "macros.h"
+#include "calculatecrc.h"
+#include "calculatecrc.h"
 
 	.text
 

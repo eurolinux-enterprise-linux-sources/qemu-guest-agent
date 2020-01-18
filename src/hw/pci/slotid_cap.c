@@ -1,22 +1,18 @@
-#include "qemu/osdep.h"
 #include "hw/pci/slotid_cap.h"
 #include "hw/pci/pci.h"
 #include "qemu/error-report.h"
-#include "qapi/error.h"
 
 #define SLOTID_CAP_LENGTH 4
 #define SLOTID_NSLOTS_SHIFT ctz32(PCI_SID_ESR_NSLOTS)
 
 int slotid_cap_init(PCIDevice *d, int nslots,
                     uint8_t chassis,
-                    unsigned offset,
-                    Error **errp)
+                    unsigned offset)
 {
     int cap;
-
     if (!chassis) {
-        error_setg(errp, "Bridge chassis not specified. Each bridge is required"
-                   " to be assigned a unique chassis id > 0.");
+        error_report("Bridge chassis not specified. Each bridge is required "
+                     "to be assigned a unique chassis id > 0.");
         return -EINVAL;
     }
     if (nslots < 0 || nslots > (PCI_SID_ESR_NSLOTS >> SLOTID_NSLOTS_SHIFT)) {
@@ -24,8 +20,7 @@ int slotid_cap_init(PCIDevice *d, int nslots,
         return -EINVAL;
     }
 
-    cap = pci_add_capability(d, PCI_CAP_ID_SLOTID, offset,
-                             SLOTID_CAP_LENGTH, errp);
+    cap = pci_add_capability(d, PCI_CAP_ID_SLOTID, offset, SLOTID_CAP_LENGTH);
     if (cap < 0) {
         return cap;
     }

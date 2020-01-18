@@ -1,5 +1,5 @@
-#ifndef QEMU_FIFO8_H
-#define QEMU_FIFO8_H
+#ifndef FIFO_H
+#define FIFO_H
 
 #include "migration/vmstate.h"
 
@@ -157,4 +157,4 @@ extern const VMStateDescription vmstate_fifo8;
     .offset     = vmstate_offset_value(_state, _field, Fifo8),       \
 }
 
-#endif /* QEMU_FIFO8_H */
+#endif /* FIFO_H */

@@ -19,8 +19,6 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "monitor/monitor.h"
 #include "hw/i386/ioapic.h"
 #include "hw/i386/ioapic_internal.h"
@@ -58,8 +56,7 @@ void ioapic_print_redtbl(Monitor *mon, IOAPICCommonState *s)
     uint32_t remote_irr = 0;
     int i;
 
-    monitor_printf(mon, "ioapic ver=0x%x id=0x%02x sel=0x%02x",
-                   s->version, s->id, s->ioregsel);
+    monitor_printf(mon, "ioapic id=0x%02x sel=0x%02x", s->id, s->ioregsel);
     if (s->ioregsel) {
         monitor_printf(mon, " (redir[%u])\n",
                        (s->ioregsel - IOAPIC_REG_REDTBL_BASE) >> 1);
@@ -102,7 +99,7 @@ void ioapic_reset_common(DeviceState *dev)
     }
 }
 
-static int ioapic_dispatch_pre_save(void *opaque)
+static void ioapic_dispatch_pre_save(void *opaque)
 {
     IOAPICCommonState *s = IOAPIC_COMMON(opaque);
     IOAPICCommonClass *info = IOAPIC_COMMON_GET_CLASS(s);
@@ -110,8 +107,6 @@ static int ioapic_dispatch_pre_save(void *opaque)
     if (info->pre_save) {
         info->pre_save(s);
     }
-
-    return 0;
 }
 
 static int ioapic_dispatch_post_load(void *opaque, int version_id)

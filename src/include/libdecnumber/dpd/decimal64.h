@@ -32,9 +32,8 @@
 /* Decimal 64-bit format module header				      */
 /* ------------------------------------------------------------------ */
 
-#ifndef DECIMAL64_H
-#define DECIMAL64_H
-
+#if !defined(DECIMAL64)
+  #define DECIMAL64
   #define DEC64NAME	"decimal64"		      /* Short name   */
   #define DEC64FULLNAME "Decimal 64-bit Number"	      /* Verbose name */
   #define DEC64AUTHOR	"Mike Cowlishaw"	      /* Who to blame */
@@ -62,7 +61,9 @@
   #ifndef DECNUMDIGITS
     #define DECNUMDIGITS DECIMAL64_Pmax /* size if not already defined*/
   #endif
-  #include "libdecnumber/decNumber.h"
+  #ifndef DECNUMBER
+    #include "libdecnumber/decNumber.h"
+  #endif
 
   /* Decimal 64-bit type, accessible by bytes			      */
   typedef struct {

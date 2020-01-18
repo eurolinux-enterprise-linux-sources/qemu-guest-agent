@@ -62,18 +62,19 @@ int tcpip_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 /**
  * Find TCP/IP network-layer protocol
  *
- * @v sa_family		Address family
+ * @v st_dest		Destination address
  * @ret tcpip_net	TCP/IP network-layer protocol, or NULL if not found
  */
-struct tcpip_net_protocol * tcpip_net_protocol ( sa_family_t sa_family ) {
+static struct tcpip_net_protocol *
+tcpip_net_protocol ( struct sockaddr_tcpip *st_dest ) {
 	struct tcpip_net_protocol *tcpip_net;
 
 	for_each_table_entry ( tcpip_net, TCPIP_NET_PROTOCOLS ) {
-		if ( tcpip_net->sa_family == sa_family )
+		if ( tcpip_net->sa_family == st_dest->st_family )
 			return tcpip_net;
 	}
 
-	DBG ( "Unrecognised TCP/IP address family %d\n", sa_family );
+	DBG ( "Unrecognised TCP/IP address family %d\n", st_dest->st_family );
 	return NULL;
 }
 
@@ -94,7 +95,7 @@ int tcpip_tx ( struct io_buffer *iobuf, struct tcpip_protocol *tcpip_protocol,
 	struct tcpip_net_protocol *tcpip_net;
 
 	/* Hand off packet to the appropriate network-layer protocol */
-	tcpip_net = tcpip_net_protocol ( st_dest->st_family );
+	tcpip_net = tcpip_net_protocol ( st_dest );
 	if ( tcpip_net ) {
 		DBG ( "TCP/IP sending %s packet\n", tcpip_net->name );
 		return tcpip_net->tx ( iobuf, tcpip_protocol, st_src, st_dest,
@@ -115,7 +116,7 @@ struct net_device * tcpip_netdev ( struct sockaddr_tcpip *st_dest ) {
 	struct tcpip_net_protocol *tcpip_net;
 
 	/* Hand off to the appropriate network-layer protocol */
-	tcpip_net = tcpip_net_protocol ( st_dest->st_family );
+	tcpip_net = tcpip_net_protocol ( st_dest );
 	if ( tcpip_net )
 		return tcpip_net->netdev ( st_dest );
 
@@ -134,7 +135,7 @@ size_t tcpip_mtu ( struct sockaddr_tcpip *st_dest ) {
 	size_t mtu;
 
 	/* Find appropriate network-layer protocol */
-	tcpip_net = tcpip_net_protocol ( st_dest->st_family );
+	tcpip_net = tcpip_net_protocol ( st_dest );
 	if ( ! tcpip_net )
 		return 0;
 
@@ -144,7 +145,8 @@ size_t tcpip_mtu ( struct sockaddr_tcpip *st_dest ) {
 		return 0;
 
 	/* Calculate MTU */
-	mtu = ( netdev->mtu - tcpip_net->header_len );
+	mtu = ( netdev->max_pkt_len - netdev->ll_protocol->ll_header_len -
+		tcpip_net->header_len );
 
 	return mtu;
 }

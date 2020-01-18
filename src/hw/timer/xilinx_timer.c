@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/ptimer.h"
 #include "qemu/log.h"
@@ -218,7 +217,7 @@ static void xilinx_timer_realize(DeviceState *dev, Error **errp)
         xt->parent = t;
         xt->nr = i;
         xt->bh = qemu_bh_new(timer_hit, xt);
-        xt->ptimer = ptimer_init(xt->bh, PTIMER_POLICY_DEFAULT);
+        xt->ptimer = ptimer_init(xt->bh);
         ptimer_set_freq(xt->ptimer, t->freq_hz);
     }
 

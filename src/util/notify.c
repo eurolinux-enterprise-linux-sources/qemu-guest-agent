@@ -13,7 +13,6 @@
  * GNU GPL, version 2 or (at your option) any later version.
  */
 
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/notify.h"
 

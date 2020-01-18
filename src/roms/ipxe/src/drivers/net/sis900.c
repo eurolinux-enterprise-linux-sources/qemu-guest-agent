@@ -249,7 +249,7 @@ static int sis96x_get_mac_addr(struct pci_device * pci_dev __unused, struct nic 
  *	MAC address is read into @net_dev->dev_addr.
  */
 
-static int sis630e_get_mac_addr(struct pci_device * pci_dev __unused, struct nic *nic __unused)
+static int sis630e_get_mac_addr(struct pci_device * pci_dev __unused, struct nic *nic)
 {
 #if 0
 	u8 reg;
@@ -279,6 +279,7 @@ static int sis630e_get_mac_addr(struct pci_device * pci_dev __unused, struct nic
 #endif
 
 	/* Does not work with current bus/device model */
+	memset ( nic->node_addr, 0, sizeof ( nic->node_addr ) );
 	return 0;
 }
 

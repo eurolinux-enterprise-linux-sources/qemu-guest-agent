@@ -37,7 +37,7 @@ smbios_entry_point_setup(u16 max_structure_size,
 
     struct smbios_entry_point ep;
     memset(&ep, 0, sizeof(ep));
-    ep.signature = SMBIOS_SIGNATURE;
+    memcpy(ep.anchor_string, "_SM_", 4);
     ep.length = 0x1f;
     ep.smbios_major_version = 2;
     ep.smbios_minor_version = 4;

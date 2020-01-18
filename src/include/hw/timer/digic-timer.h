@@ -19,6 +19,7 @@
 #define HW_TIMER_DIGIC_TIMER_H
 
 #include "hw/sysbus.h"
+#include "qemu/typedefs.h"
 #include "hw/ptimer.h"
 
 #define TYPE_DIGIC_TIMER "digic-timer"

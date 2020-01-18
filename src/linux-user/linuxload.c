@@ -1,6 +1,12 @@
 /* Code for loading Linux executables.  Mostly linux kernel code.  */
 
-#include "qemu/osdep.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "qemu.h"
 

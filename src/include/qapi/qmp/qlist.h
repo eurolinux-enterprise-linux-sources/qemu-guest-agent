@@ -21,18 +21,13 @@ typedef struct QListEntry {
     QTAILQ_ENTRY(QListEntry) next;
 } QListEntry;
 
-struct QList {
+typedef struct QList {
     QObject base;
     QTAILQ_HEAD(,QListEntry) head;
-};
+} QList;
 
 #define qlist_append(qlist, obj) \
         qlist_append_obj(qlist, QOBJECT(obj))
-
-void qlist_append_bool(QList *qlist, bool value);
-void qlist_append_int(QList *qlist, int64_t value);
-void qlist_append_null(QList *qlist);
-void qlist_append_str(QList *qlist, const char *value);
 
 #define QLIST_FOREACH_ENTRY(qlist, var)             \
         for ((var) = ((qlist)->head.tqh_first);     \
@@ -53,8 +48,7 @@ QObject *qlist_pop(QList *qlist);
 QObject *qlist_peek(QList *qlist);
 int qlist_empty(const QList *qlist);
 size_t qlist_size(const QList *qlist);
-bool qlist_is_equal(const QObject *x, const QObject *y);
-void qlist_destroy_obj(QObject *obj);
+QList *qobject_to_qlist(const QObject *obj);
 
 static inline const QListEntry *qlist_first(const QList *qlist)
 {

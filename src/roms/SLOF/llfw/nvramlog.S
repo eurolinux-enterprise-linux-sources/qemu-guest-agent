@@ -12,6 +12,7 @@
 #include <macros.h>
 #include <nvramlog.h>
 #include <southbridge.h>
+#include <calculatecrc.h>
 
 #if !defined(DISABLE_NVRAM) && !defined(RTAS_NVRAM)
 

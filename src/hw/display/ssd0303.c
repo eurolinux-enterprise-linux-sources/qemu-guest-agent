@@ -10,7 +10,6 @@
 /* The controller can support a variety of different displays, but we only
    implement one.  Most of the commends relating to brightness and geometry
    setup are ignored. */
-#include "qemu/osdep.h"
 #include "hw/i2c/i2c.h"
 #include "ui/console.h"
 
@@ -179,7 +178,7 @@ static int ssd0303_send(I2CSlave *i2c, uint8_t data)
     return 0;
 }
 
-static int ssd0303_event(I2CSlave *i2c, enum i2c_event event)
+static void ssd0303_event(I2CSlave *i2c, enum i2c_event event)
 {
     ssd0303_state *s = SSD0303(i2c);
 
@@ -193,8 +192,6 @@ static int ssd0303_event(I2CSlave *i2c, enum i2c_event event)
         /* Nothing to do.  */
         break;
     }
-
-    return 0;
 }
 
 static void ssd0303_update_display(void *opaque)

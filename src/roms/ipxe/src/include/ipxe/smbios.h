@@ -152,9 +152,6 @@ struct smbios_enclosure_information {
 /** SMBIOS enclosure information structure type */
 #define SMBIOS_TYPE_ENCLOSURE_INFORMATION 3
 
-/** SMBIOS OEM strings structure type */
-#define SMBIOS_TYPE_OEM_STRINGS 11
-
 /**
  * SMBIOS entry point descriptor
  *

@@ -13,7 +13,7 @@
 
 #include <inttypes.h>
 
-/* endianness */
+/* endianess */
 
 #include <endian.h>
 

@@ -22,13 +22,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "hw/i386/pc.h"
 #include "hw/isa/i8259_internal.h"
-#include "monitor/monitor.h"
-
-static int irq_level[16];
-static uint64_t irq_count[16];
 
 void pic_reset_common(PICCommonState *s)
 {
@@ -50,7 +45,7 @@ void pic_reset_common(PICCommonState *s)
     /* Note: ELCR is not reset */
 }
 
-static int pic_dispatch_pre_save(void *opaque)
+static void pic_dispatch_pre_save(void *opaque)
 {
     PICCommonState *s = opaque;
     PICCommonClass *info = PIC_COMMON_GET_CLASS(s);
@@ -58,8 +53,6 @@ static int pic_dispatch_pre_save(void *opaque)
     if (info->pre_save) {
         info->pre_save(s);
     }
-
-    return 0;
 }
 
 static int pic_dispatch_post_load(void *opaque, int version_id)
@@ -76,11 +69,10 @@ static int pic_dispatch_post_load(void *opaque, int version_id)
 static void pic_common_realize(DeviceState *dev, Error **errp)
 {
     PICCommonState *s = PIC_COMMON(dev);
-    ISADevice *isa = ISA_DEVICE(dev);
 
-    isa_register_ioport(isa, &s->base_io, s->iobase);
+    isa_register_ioport(NULL, &s->base_io, s->iobase);
     if (s->elcr_addr != -1) {
-        isa_register_ioport(isa, &s->elcr_io, s->elcr_addr);
+        isa_register_ioport(NULL, &s->elcr_io, s->elcr_addr);
     }
 
     qdev_set_legacy_instance_id(dev, s->iobase, 1);
@@ -100,44 +92,6 @@ ISADevice *i8259_init_chip(const char *name, ISABus *bus, bool master)
     qdev_init_nofail(dev);
 
     return isadev;
-}
-
-void pic_stat_update_irq(int irq, int level)
-{
-    if (level != irq_level[irq]) {
-        irq_level[irq] = level;
-        if (level == 1) {
-            irq_count[irq]++;
-        }
-    }
-}
-
-bool pic_get_statistics(InterruptStatsProvider *obj,
-                        uint64_t **irq_counts, unsigned int *nb_irqs)
-{
-    PICCommonState *s = PIC_COMMON(obj);
-
-    if (s->master) {
-        *irq_counts = irq_count;
-        *nb_irqs = ARRAY_SIZE(irq_count);
-    } else {
-        *irq_counts = NULL;
-        *nb_irqs = 0;
-    }
-
-    return true;
-}
-
-void pic_print_info(InterruptStatsProvider *obj, Monitor *mon)
-{
-    PICCommonState *s = PIC_COMMON(obj);
-
-    pic_dispatch_pre_save(s);
-    monitor_printf(mon, "pic%d: irr=%02x imr=%02x isr=%02x hprio=%d "
-                   "irq_base=%02x rr_sel=%d elcr=%02x fnm=%d\n",
-                   s->master ? 0 : 1, s->irr, s->imr, s->isr, s->priority_add,
-                   s->irq_base, s->read_reg_select, s->elcr,
-                   s->special_fully_nested_mode);
 }
 
 static const VMStateDescription vmstate_pic_common = {
@@ -178,7 +132,6 @@ static Property pic_properties_common[] = {
 static void pic_common_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
-    InterruptStatsProviderClass *ic = INTERRUPT_STATS_PROVIDER_CLASS(klass);
 
     dc->vmsd = &vmstate_pic_common;
     dc->props = pic_properties_common;
@@ -189,9 +142,7 @@ static void pic_common_class_init(ObjectClass *klass, void *data)
      * wiring of the slave to the master is hard-coded in device model
      * code.
      */
-    dc->user_creatable = false;
-    ic->get_statistics = pic_get_statistics;
-    ic->print_info = pic_print_info;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo pic_common_type = {
@@ -201,10 +152,6 @@ static const TypeInfo pic_common_type = {
     .class_size = sizeof(PICCommonClass),
     .class_init = pic_common_class_init,
     .abstract = true,
-    .interfaces = (InterfaceInfo[]) {
-        { TYPE_INTERRUPT_STATS_PROVIDER },
-        { }
-    },
 };
 
 static void pic_common_register_types(void)

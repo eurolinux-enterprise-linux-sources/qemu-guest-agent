@@ -19,9 +19,8 @@
  * GNU General Public License for more details.
  *
  */
-
-#ifndef ALLWINNER_EMAC_H
-#define ALLWINNER_EMAC_H
+#ifndef AW_EMAC_H
+#define AW_EMAC_H
 
 #include "net/net.h"
 #include "qemu/fifo8.h"

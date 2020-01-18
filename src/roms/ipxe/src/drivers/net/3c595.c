@@ -391,7 +391,7 @@ vxsetlink(void)
 {       
     int i, j;
     char *reason, *warning;
-    static signed char prev_conn = -1;
+    static char prev_conn = -1;
 
     if (prev_conn == -1) {
         prev_conn = vx_connector;

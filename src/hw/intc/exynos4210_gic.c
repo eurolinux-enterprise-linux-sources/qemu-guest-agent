@@ -20,7 +20,6 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "qemu-common.h"
 #include "hw/irq.h"
@@ -116,7 +115,7 @@ enum ExtInt {
  * which is INTG16 in Internal Interrupt Combiner.
  */
 
-static const uint32_t
+static uint32_t
 combiner_grp_to_gic_id[64-EXYNOS4210_MAX_EXT_COMBINER_OUT_IRQ][8] = {
     /* int combiner groups 16-19 */
     { }, { }, { }, { },
@@ -281,42 +280,41 @@ static void exynos4210_gic_set_irq(void *opaque, int irq, int level)
     qemu_set_irq(qdev_get_gpio_in(s->gic, irq), level);
 }
 
-static void exynos4210_gic_init(Object *obj)
+static int exynos4210_gic_init(SysBusDevice *sbd)
 {
-    DeviceState *dev = DEVICE(obj);
-    Exynos4210GicState *s = EXYNOS4210_GIC(obj);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+    DeviceState *dev = DEVICE(sbd);
+    Exynos4210GicState *s = EXYNOS4210_GIC(dev);
+    uint32_t i;
     const char cpu_prefix[] = "exynos4210-gic-alias_cpu";
     const char dist_prefix[] = "exynos4210-gic-alias_dist";
     char cpu_alias_name[sizeof(cpu_prefix) + 3];
     char dist_alias_name[sizeof(cpu_prefix) + 3];
-    SysBusDevice *gicbusdev;
-    uint32_t i;
+    SysBusDevice *busdev;
 
     s->gic = qdev_create(NULL, "arm_gic");
     qdev_prop_set_uint32(s->gic, "num-cpu", s->num_cpu);
     qdev_prop_set_uint32(s->gic, "num-irq", EXYNOS4210_GIC_NIRQ);
     qdev_init_nofail(s->gic);
-    gicbusdev = SYS_BUS_DEVICE(s->gic);
+    busdev = SYS_BUS_DEVICE(s->gic);
 
     /* Pass through outbound IRQ lines from the GIC */
-    sysbus_pass_irq(sbd, gicbusdev);
+    sysbus_pass_irq(sbd, busdev);
 
     /* Pass through inbound GPIO lines to the GIC */
     qdev_init_gpio_in(dev, exynos4210_gic_set_irq,
                       EXYNOS4210_GIC_NIRQ - 32);
 
-    memory_region_init(&s->cpu_container, obj, "exynos4210-cpu-container",
+    memory_region_init(&s->cpu_container, OBJECT(s), "exynos4210-cpu-container",
             EXYNOS4210_EXT_GIC_CPU_REGION_SIZE);
-    memory_region_init(&s->dist_container, obj, "exynos4210-dist-container",
+    memory_region_init(&s->dist_container, OBJECT(s), "exynos4210-dist-container",
             EXYNOS4210_EXT_GIC_DIST_REGION_SIZE);
 
     for (i = 0; i < s->num_cpu; i++) {
         /* Map CPU interface per SMP Core */
         sprintf(cpu_alias_name, "%s%x", cpu_prefix, i);
-        memory_region_init_alias(&s->cpu_alias[i], obj,
+        memory_region_init_alias(&s->cpu_alias[i], OBJECT(s),
                                  cpu_alias_name,
-                                 sysbus_mmio_get_region(gicbusdev, 1),
+                                 sysbus_mmio_get_region(busdev, 1),
                                  0,
                                  EXYNOS4210_GIC_CPU_REGION_SIZE);
         memory_region_add_subregion(&s->cpu_container,
@@ -324,9 +322,9 @@ static void exynos4210_gic_init(Object *obj)
 
         /* Map Distributor per SMP Core */
         sprintf(dist_alias_name, "%s%x", dist_prefix, i);
-        memory_region_init_alias(&s->dist_alias[i], obj,
+        memory_region_init_alias(&s->dist_alias[i], OBJECT(s),
                                  dist_alias_name,
-                                 sysbus_mmio_get_region(gicbusdev, 0),
+                                 sysbus_mmio_get_region(busdev, 0),
                                  0,
                                  EXYNOS4210_GIC_DIST_REGION_SIZE);
         memory_region_add_subregion(&s->dist_container,
@@ -335,6 +333,8 @@ static void exynos4210_gic_init(Object *obj)
 
     sysbus_init_mmio(sbd, &s->cpu_container);
     sysbus_init_mmio(sbd, &s->dist_container);
+
+    return 0;
 }
 
 static Property exynos4210_gic_properties[] = {
@@ -345,7 +345,9 @@ static Property exynos4210_gic_properties[] = {
 static void exynos4210_gic_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
+    k->init = exynos4210_gic_init;
     dc->props = exynos4210_gic_properties;
 }
 
@@ -353,7 +355,6 @@ static const TypeInfo exynos4210_gic_info = {
     .name          = TYPE_EXYNOS4210_GIC,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(Exynos4210GicState),
-    .instance_init = exynos4210_gic_init,
     .class_init    = exynos4210_gic_class_init,
 };
 
@@ -393,7 +394,7 @@ static const VMStateDescription vmstate_exynos4210_irq_gate = {
     .version_id = 2,
     .minimum_version_id = 2,
     .fields = (VMStateField[]) {
-        VMSTATE_VBUFFER_UINT32(level, Exynos4210IRQGateState, 1, NULL, n_in),
+        VMSTATE_VBUFFER_UINT32(level, Exynos4210IRQGateState, 1, NULL, 0, n_in),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -428,16 +429,9 @@ static void exynos4210_irq_gate_reset(DeviceState *d)
 /*
  * IRQ Gate initialization.
  */
-static void exynos4210_irq_gate_init(Object *obj)
+static int exynos4210_irq_gate_init(SysBusDevice *sbd)
 {
-    Exynos4210IRQGateState *s = EXYNOS4210_IRQ_GATE(obj);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
-
-    sysbus_init_irq(sbd, &s->out);
-}
-
-static void exynos4210_irq_gate_realize(DeviceState *dev, Error **errp)
-{
+    DeviceState *dev = DEVICE(sbd);
     Exynos4210IRQGateState *s = EXYNOS4210_IRQ_GATE(dev);
 
     /* Allocate general purpose input signals and connect a handler to each of
@@ -445,23 +439,27 @@ static void exynos4210_irq_gate_realize(DeviceState *dev, Error **errp)
     qdev_init_gpio_in(dev, exynos4210_irq_gate_handler, s->n_in);
 
     s->level = g_malloc0(s->n_in * sizeof(*s->level));
+
+    sysbus_init_irq(sbd, &s->out);
+
+    return 0;
 }
 
 static void exynos4210_irq_gate_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
+    k->init = exynos4210_irq_gate_init;
     dc->reset = exynos4210_irq_gate_reset;
     dc->vmsd = &vmstate_exynos4210_irq_gate;
     dc->props = exynos4210_irq_gate_properties;
-    dc->realize = exynos4210_irq_gate_realize;
 }
 
 static const TypeInfo exynos4210_irq_gate_info = {
     .name          = TYPE_EXYNOS4210_IRQ_GATE,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(Exynos4210IRQGateState),
-    .instance_init = exynos4210_irq_gate_init,
     .class_init    = exynos4210_irq_gate_class_init,
 };
 

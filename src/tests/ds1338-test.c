@@ -17,9 +17,10 @@
  *  with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "libqtest.h"
 #include "libqos/i2c.h"
+
+#include <glib.h>
 
 #define IMX25_I2C_0_BASE 0x43F80000
 
@@ -61,14 +62,16 @@ int main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     s = qtest_start("-display none -machine imx25-pdk");
-    i2c = imx_i2c_create(s, IMX25_I2C_0_BASE);
+    i2c = imx_i2c_create(IMX25_I2C_0_BASE);
     addr = DS1338_ADDR;
 
     qtest_add_func("/ds1338/tx-rx", send_and_receive);
 
     ret = g_test_run();
 
-    qtest_quit(s);
+    if (s) {
+        qtest_quit(s);
+    }
     g_free(i2c);
 
     return ret;

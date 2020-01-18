@@ -17,8 +17,7 @@
  * You should have received a copy of the GNU General Public License along
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-#include "qemu/osdep.h"
-#include "chardev/char.h"
+#include "sysemu/char.h"
 #include "hw/hw.h"
 #include "hw/arm/omap.h"
 #include "hw/char/serial.h"
@@ -54,7 +53,7 @@ void omap_uart_reset(struct omap_uart_s *s)
 struct omap_uart_s *omap_uart_init(hwaddr base,
                 qemu_irq irq, omap_clk fclk, omap_clk iclk,
                 qemu_irq txdma, qemu_irq rxdma,
-                const char *label, Chardev *chr)
+                const char *label, CharDriverState *chr)
 {
     struct omap_uart_s *s = g_new0(struct omap_uart_s, 1);
 
@@ -63,7 +62,7 @@ struct omap_uart_s *omap_uart_init(hwaddr base,
     s->irq = irq;
     s->serial = serial_mm_init(get_system_memory(), base, 2, irq,
                                omap_clk_getrate(fclk)/16,
-                               chr ?: qemu_chr_new(label, "null"),
+                               chr ?: qemu_chr_new(label, "null", NULL),
                                DEVICE_NATIVE_ENDIAN);
     return s;
 }
@@ -163,7 +162,7 @@ struct omap_uart_s *omap2_uart_init(MemoryRegion *sysmem,
                 struct omap_target_agent_s *ta,
                 qemu_irq irq, omap_clk fclk, omap_clk iclk,
                 qemu_irq txdma, qemu_irq rxdma,
-                const char *label, Chardev *chr)
+                const char *label, CharDriverState *chr)
 {
     hwaddr base = omap_l4_attach(ta, 0, NULL);
     struct omap_uart_s *s = omap_uart_init(base, irq,
@@ -178,11 +177,11 @@ struct omap_uart_s *omap2_uart_init(MemoryRegion *sysmem,
     return s;
 }
 
-void omap_uart_attach(struct omap_uart_s *s, Chardev *chr)
+void omap_uart_attach(struct omap_uart_s *s, CharDriverState *chr)
 {
     /* TODO: Should reuse or destroy current s->serial */
     s->serial = serial_mm_init(get_system_memory(), s->base, 2, s->irq,
                                omap_clk_getrate(s->fclk) / 16,
-                               chr ?: qemu_chr_new("null", "null"),
+                               chr ?: qemu_chr_new("null", "null", NULL),
                                DEVICE_NATIVE_ENDIAN);
 }

@@ -73,8 +73,7 @@ variable keyboard-phandle 0 keyboard-phandle !
   keyboard-phandle @ if
     active-package
     " /aliases" find-device
-    keyboard-phandle @ get-package-path 2dup
-    encode-string " kbd" property
+    keyboard-phandle @ get-package-path
     encode-string " keyboard" property
     active-package!  
   then
@@ -96,13 +95,15 @@ variable keyboard-phandle 0 keyboard-phandle !
 ; PREPOST-initializer
 
 \ -------------------------------------------------------------------------
-\ copyright property handling
+\ Adler-32 wrapper
 \ -------------------------------------------------------------------------
 
-: insert-copyright-property
-  \ As required for MacOS 9 and below
-  " Pbclevtug 1983-2001 Nccyr Pbzchgre, Vap. GUVF ZRFFNTR SBE PBZCNGVOVYVGL BAYL"
-  rot13-str encode-string " copyright"
+: adler32 ( adler buf len -- checksum )
+  \ Since Mac OS 9 is the only system using this word, we take this
+  \ opportunity to inject a copyright message that is necessary for the
+  \ system to boot.
+  " Copyright 1983-2001 Apple Computer, Inc. THIS MESSAGE FOR COMPATIBILITY ONLY"
+  encode-string " copyright"
   " /" find-package if
     " set-property" $find if
       execute
@@ -110,28 +111,9 @@ variable keyboard-phandle 0 keyboard-phandle !
       3drop drop
     then
   then
-;
 
-: delete-copyright-property
-  \ Remove copyright property created above
-  active-package
-  " /" find-package if
-      active-package!
-      " copyright" delete-property
-  then
-  active-package!
-;
+  ( adler buf len )
 
-: (exit)
-  \ Clean up before returning to the interpreter
-  delete-copyright-property
-;
-
-\ -------------------------------------------------------------------------
-\ Adler-32 wrapper
-\ -------------------------------------------------------------------------
-
-: adler32 ( adler buf len -- checksum )
   " (adler32)" $find if
     execute
   else

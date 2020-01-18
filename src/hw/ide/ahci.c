@@ -21,19 +21,27 @@
  *
  */
 
-#include "qemu/osdep.h"
-#include "hw/hw.h"
-#include "hw/pci/msi.h"
-#include "hw/pci/pci.h"
+#include <hw/hw.h>
+#include <hw/pci/msi.h>
+#include <hw/i386/pc.h>
+#include <hw/pci/pci.h>
 
 #include "qemu/error-report.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/dma.h"
-#include "hw/ide/internal.h"
-#include "hw/ide/pci.h"
-#include "hw/ide/ahci_internal.h"
+#include "internal.h"
+#include <hw/ide/pci.h>
+#include <hw/ide/ahci.h>
 
-#include "trace.h"
+#define DEBUG_AHCI 0
+
+#define DPRINTF(port, fmt, ...) \
+do { \
+    if (DEBUG_AHCI) { \
+        fprintf(stderr, "ahci: %s: [%d] ", __func__, port); \
+        fprintf(stderr, fmt, ## __VA_ARGS__); \
+    } \
+} while (0)
 
 static void check_cmd(AHCIState *s, int port);
 static int handle_cmd(AHCIState *s, int port, uint8_t slot);
@@ -46,27 +54,6 @@ static bool ahci_map_fis_address(AHCIDevice *ad);
 static void ahci_unmap_clb_address(AHCIDevice *ad);
 static void ahci_unmap_fis_address(AHCIDevice *ad);
 
-static const char *AHCIPortIRQ_lookup[AHCI_PORT_IRQ__COUNT] = {
-    [AHCI_PORT_IRQ_BIT_DHRS] = "DHRS",
-    [AHCI_PORT_IRQ_BIT_PSS]  = "PSS",
-    [AHCI_PORT_IRQ_BIT_DSS]  = "DSS",
-    [AHCI_PORT_IRQ_BIT_SDBS] = "SDBS",
-    [AHCI_PORT_IRQ_BIT_UFS]  = "UFS",
-    [AHCI_PORT_IRQ_BIT_DPS]  = "DPS",
-    [AHCI_PORT_IRQ_BIT_PCS]  = "PCS",
-    [AHCI_PORT_IRQ_BIT_DMPS] = "DMPS",
-    [8 ... 21]               = "RESERVED",
-    [AHCI_PORT_IRQ_BIT_PRCS] = "PRCS",
-    [AHCI_PORT_IRQ_BIT_IPMS] = "IPMS",
-    [AHCI_PORT_IRQ_BIT_OFS]  = "OFS",
-    [25]                     = "RESERVED",
-    [AHCI_PORT_IRQ_BIT_INFS] = "INFS",
-    [AHCI_PORT_IRQ_BIT_IFS]  = "IFS",
-    [AHCI_PORT_IRQ_BIT_HBDS] = "HBDS",
-    [AHCI_PORT_IRQ_BIT_HBFS] = "HBFS",
-    [AHCI_PORT_IRQ_BIT_TFES] = "TFES",
-    [AHCI_PORT_IRQ_BIT_CPDS] = "CPDS"
-};
 
 static uint32_t  ahci_port_read(AHCIState *s, int port, int offset)
 {
@@ -126,9 +113,9 @@ static uint32_t  ahci_port_read(AHCIState *s, int port, int offset)
     default:
         val = 0;
     }
-
-    trace_ahci_port_read(s, port, offset, val);
+    DPRINTF(port, "offset: 0x%x val: 0x%x\n", offset, val);
     return val;
+
 }
 
 static void ahci_irq_raise(AHCIState *s, AHCIDevice *dev)
@@ -137,7 +124,7 @@ static void ahci_irq_raise(AHCIState *s, AHCIDevice *dev)
     PCIDevice *pci_dev = (PCIDevice *) object_dynamic_cast(OBJECT(dev_state),
                                                            TYPE_PCI_DEVICE);
 
-    trace_ahci_irq_raise(s);
+    DPRINTF(0, "raise irq\n");
 
     if (pci_dev && msi_enabled(pci_dev)) {
         msi_notify(pci_dev, 0);
@@ -152,7 +139,7 @@ static void ahci_irq_lower(AHCIState *s, AHCIDevice *dev)
     PCIDevice *pci_dev = (PCIDevice *) object_dynamic_cast(OBJECT(dev_state),
                                                            TYPE_PCI_DEVICE);
 
-    trace_ahci_irq_lower(s);
+    DPRINTF(0, "lower irq\n");
 
     if (!pci_dev || !msi_enabled(pci_dev)) {
         qemu_irq_lower(s->irq);
@@ -162,7 +149,8 @@ static void ahci_irq_lower(AHCIState *s, AHCIDevice *dev)
 static void ahci_check_irq(AHCIState *s)
 {
     int i;
-    uint32_t old_irq = s->control_regs.irqstatus;
+
+    DPRINTF(-1, "check irq %#x\n", s->control_regs.irqstatus);
 
     s->control_regs.irqstatus = 0;
     for (i = 0; i < s->ports; i++) {
@@ -171,7 +159,7 @@ static void ahci_check_irq(AHCIState *s)
             s->control_regs.irqstatus |= (1 << i);
         }
     }
-    trace_ahci_check_irq(s, old_irq, s->control_regs.irqstatus);
+
     if (s->control_regs.irqstatus &&
         (s->control_regs.ghc & HOST_CTL_IRQ_EN)) {
             ahci_irq_raise(s, NULL);
@@ -181,18 +169,12 @@ static void ahci_check_irq(AHCIState *s)
 }
 
 static void ahci_trigger_irq(AHCIState *s, AHCIDevice *d,
-                             enum AHCIPortIRQ irqbit)
+                             int irq_type)
 {
-    g_assert((unsigned)irqbit < 32);
-    uint32_t irq = 1U << irqbit;
-    uint32_t irqstat = d->port_regs.irq_stat | irq;
+    DPRINTF(d->port_no, "trigger irq %#x -> %x\n",
+            irq_type, d->port_regs.irq_mask & irq_type);
 
-    trace_ahci_trigger_irq(s, d->port_no,
-                           AHCIPortIRQ_lookup[irqbit], irq,
-                           d->port_regs.irq_stat, irqstat,
-                           irqstat & d->port_regs.irq_mask);
-
-    d->port_regs.irq_stat = irqstat;
+    d->port_regs.irq_stat |= irq_type;
     ahci_check_irq(s);
 }
 
@@ -216,38 +198,52 @@ static void map_page(AddressSpace *as, uint8_t **ptr, uint64_t addr,
  * Check the cmd register to see if we should start or stop
  * the DMA or FIS RX engines.
  *
- * @ad: Device to dis/engage.
+ * @ad: Device to engage.
+ * @allow_stop: Allow device to transition from started to stopped?
+ *   'no' is useful for migration post_load, which does not expect a transition.
  *
  * @return 0 on success, -1 on error.
  */
-static int ahci_cond_start_engines(AHCIDevice *ad)
+static int ahci_cond_start_engines(AHCIDevice *ad, bool allow_stop)
 {
     AHCIPortRegs *pr = &ad->port_regs;
-    bool cmd_start = pr->cmd & PORT_CMD_START;
-    bool cmd_on    = pr->cmd & PORT_CMD_LIST_ON;
-    bool fis_start = pr->cmd & PORT_CMD_FIS_RX;
-    bool fis_on    = pr->cmd & PORT_CMD_FIS_ON;
 
-    if (cmd_start && !cmd_on) {
-        if (!ahci_map_clb_address(ad)) {
-            pr->cmd &= ~PORT_CMD_START;
+    if (pr->cmd & PORT_CMD_START) {
+        if (ahci_map_clb_address(ad)) {
+            pr->cmd |= PORT_CMD_LIST_ON;
+        } else {
             error_report("AHCI: Failed to start DMA engine: "
                          "bad command list buffer address");
             return -1;
         }
-    } else if (!cmd_start && cmd_on) {
-        ahci_unmap_clb_address(ad);
+    } else if (pr->cmd & PORT_CMD_LIST_ON) {
+        if (allow_stop) {
+            ahci_unmap_clb_address(ad);
+            pr->cmd = pr->cmd & ~(PORT_CMD_LIST_ON);
+        } else {
+            error_report("AHCI: DMA engine should be off, "
+                         "but appears to still be running");
+            return -1;
+        }
     }
 
-    if (fis_start && !fis_on) {
-        if (!ahci_map_fis_address(ad)) {
-            pr->cmd &= ~PORT_CMD_FIS_RX;
+    if (pr->cmd & PORT_CMD_FIS_RX) {
+        if (ahci_map_fis_address(ad)) {
+            pr->cmd |= PORT_CMD_FIS_ON;
+        } else {
             error_report("AHCI: Failed to start FIS receive engine: "
                          "bad FIS receive buffer address");
             return -1;
         }
-    } else if (!fis_start && fis_on) {
-        ahci_unmap_fis_address(ad);
+    } else if (pr->cmd & PORT_CMD_FIS_ON) {
+        if (allow_stop) {
+            ahci_unmap_fis_address(ad);
+            pr->cmd = pr->cmd & ~(PORT_CMD_FIS_ON);
+        } else {
+            error_report("AHCI: FIS receive engine should be off, "
+                         "but appears to still be running");
+            return -1;
+        }
     }
 
     return 0;
@@ -257,7 +253,7 @@ static void  ahci_port_write(AHCIState *s, int port, int offset, uint32_t val)
 {
     AHCIPortRegs *pr = &s->dev[port].port_regs;
 
-    trace_ahci_port_write(s, port, offset, val);
+    DPRINTF(port, "offset: 0x%x val: 0x%x\n", offset, val);
     switch (offset) {
         case PORT_LST_ADDR:
             pr->lst_addr = val;
@@ -289,8 +285,8 @@ static void  ahci_port_write(AHCIState *s, int port, int offset, uint32_t val)
             pr->cmd = (pr->cmd & PORT_CMD_RO_MASK) |
                       (val & ~(PORT_CMD_RO_MASK|PORT_CMD_ICC_MASK));
 
-            /* Check FIS RX and CLB engines */
-            ahci_cond_start_engines(&s->dev[port]);
+            /* Check FIS RX and CLB engines, allow transition to false: */
+            ahci_cond_start_engines(&s->dev[port], true);
 
             /* XXX usually the FIS would be pending on the bus here and
                    issuing deferred until the OS enables FIS receival.
@@ -358,6 +354,8 @@ static uint64_t ahci_mem_read_32(void *opaque, hwaddr addr)
             val = s->control_regs.version;
             break;
         }
+
+        DPRINTF(-1, "(addr 0x%08X), val 0x%08X\n", (unsigned) addr, val);
     } else if ((addr >= AHCI_PORT_REGS_START_ADDR) &&
                (addr < (AHCI_PORT_REGS_START_ADDR +
                 (s->ports * AHCI_PORT_ADDR_OFFSET_LEN)))) {
@@ -365,7 +363,6 @@ static uint64_t ahci_mem_read_32(void *opaque, hwaddr addr)
                              addr & AHCI_PORT_ADDR_OFFSET_MASK);
     }
 
-    trace_ahci_mem_read_32(s, addr, val);
     return val;
 }
 
@@ -395,7 +392,8 @@ static uint64_t ahci_mem_read(void *opaque, hwaddr addr, unsigned size)
         val = (hi << 32 | lo) >> (ofst * 8);
     }
 
-    trace_ahci_mem_read(opaque, size, addr, val);
+    DPRINTF(-1, "addr=0x%" HWADDR_PRIx " val=0x%" PRIx64 ", size=%d\n",
+            addr, val, size);
     return val;
 }
 
@@ -405,7 +403,8 @@ static void ahci_mem_write(void *opaque, hwaddr addr,
 {
     AHCIState *s = opaque;
 
-    trace_ahci_mem_write(s, size, addr, val);
+    DPRINTF(-1, "addr=0x%" HWADDR_PRIx " val=0x%" PRIx64 ", size=%d\n",
+            addr, val, size);
 
     /* Only aligned reads are allowed on AHCI */
     if (addr & 3) {
@@ -415,12 +414,15 @@ static void ahci_mem_write(void *opaque, hwaddr addr,
     }
 
     if (addr < AHCI_GENERIC_HOST_CONTROL_REGS_MAX_ADDR) {
+        DPRINTF(-1, "(addr 0x%08X), val 0x%08"PRIX64"\n", (unsigned) addr, val);
+
         switch (addr) {
             case HOST_CAP: /* R/WO, RO */
                 /* FIXME handle R/WO */
                 break;
             case HOST_CTL: /* R/W */
                 if (val & HOST_CTL_RESET) {
+                    DPRINTF(-1, "HBA Reset\n");
                     ahci_reset(s);
                 } else {
                     s->control_regs.ghc = (val & 0x3) | HOST_CTL_AHCI_EN;
@@ -438,7 +440,7 @@ static void ahci_mem_write(void *opaque, hwaddr addr,
                 /* FIXME report write? */
                 break;
             default:
-                trace_ahci_mem_write_unknown(s, size, addr, val);
+                DPRINTF(-1, "write to unknown register 0x%x\n", (unsigned)addr);
         }
     } else if ((addr >= AHCI_PORT_REGS_START_ADDR) &&
                (addr < (AHCI_PORT_REGS_START_ADDR +
@@ -499,7 +501,7 @@ static void ahci_reg_init(AHCIState *s)
     s->control_regs.cap = (s->ports - 1) |
                           (AHCI_NUM_COMMAND_SLOTS << 8) |
                           (AHCI_SUPPORTED_SPEED_GEN1 << AHCI_SUPPORTED_SPEED) |
-                          HOST_CAP_NCQ | HOST_CAP_AHCI | HOST_CAP_64;
+                          HOST_CAP_NCQ | HOST_CAP_AHCI;
 
     s->control_regs.impl = (1 << s->ports) - 1;
 
@@ -570,8 +572,7 @@ static void ahci_set_signature(AHCIDevice *ad, uint32_t sig)
     s->sector = sig >> 8 & 0xFF;
     s->nsector = sig & 0xFF;
 
-    trace_ahci_set_signature(ad->hba, ad->port_no, s->nsector, s->sector,
-                             s->lcyl, s->hcyl, sig);
+    DPRINTF(ad->port_no, "set hcyl:lcyl:sect:nsect = 0x%08x\n", sig);
 }
 
 static void ahci_reset_port(AHCIState *s, int port)
@@ -581,7 +582,7 @@ static void ahci_reset_port(AHCIState *s, int port)
     IDEState *ide_state = &d->port.ifs[0];
     int i;
 
-    trace_ahci_reset_port(s, port);
+    DPRINTF(port, "reset port\n");
 
     ide_bus_reset(&d->port);
     ide_state->ncq_queues = AHCI_MAX_CMDS;
@@ -634,21 +635,20 @@ static void ahci_reset_port(AHCIState *s, int port)
     ahci_init_d2h(d);
 }
 
-/* Buffer pretty output based on a raw FIS structure. */
-static char *ahci_pretty_buffer_fis(uint8_t *fis, int cmd_len)
+static void debug_print_fis(uint8_t *fis, int cmd_len)
 {
+#if DEBUG_AHCI
     int i;
-    GString *s = g_string_new("FIS:");
 
+    fprintf(stderr, "fis:");
     for (i = 0; i < cmd_len; i++) {
         if ((i & 0xf) == 0) {
-            g_string_append_printf(s, "\n0x%02x: ", i);
+            fprintf(stderr, "\n%02x:",i);
         }
-        g_string_append_printf(s, "%02x ", fis[i]);
+        fprintf(stderr, "%02x ",fis[i]);
     }
-    g_string_append_c(s, '\n');
-
-    return g_string_free(s, FALSE);
+    fprintf(stderr, "\n");
+#endif
 }
 
 static bool ahci_map_fis_address(AHCIDevice *ad)
@@ -656,22 +656,11 @@ static bool ahci_map_fis_address(AHCIDevice *ad)
     AHCIPortRegs *pr = &ad->port_regs;
     map_page(ad->hba->as, &ad->res_fis,
              ((uint64_t)pr->fis_addr_hi << 32) | pr->fis_addr, 256);
-    if (ad->res_fis != NULL) {
-        pr->cmd |= PORT_CMD_FIS_ON;
-        return true;
-    }
-
-    pr->cmd &= ~PORT_CMD_FIS_ON;
-    return false;
+    return ad->res_fis != NULL;
 }
 
 static void ahci_unmap_fis_address(AHCIDevice *ad)
 {
-    if (ad->res_fis == NULL) {
-        trace_ahci_unmap_fis_address_null(ad->hba, ad->port_no);
-        return;
-    }
-    ad->port_regs.cmd &= ~PORT_CMD_FIS_ON;
     dma_memory_unmap(ad->hba->as, ad->res_fis, 256,
                      DMA_DIRECTION_FROM_DEVICE, 256);
     ad->res_fis = NULL;
@@ -683,22 +672,11 @@ static bool ahci_map_clb_address(AHCIDevice *ad)
     ad->cur_cmd = NULL;
     map_page(ad->hba->as, &ad->lst,
              ((uint64_t)pr->lst_addr_hi << 32) | pr->lst_addr, 1024);
-    if (ad->lst != NULL) {
-        pr->cmd |= PORT_CMD_LIST_ON;
-        return true;
-    }
-
-    pr->cmd &= ~PORT_CMD_LIST_ON;
-    return false;
+    return ad->lst != NULL;
 }
 
 static void ahci_unmap_clb_address(AHCIDevice *ad)
 {
-    if (ad->lst == NULL) {
-        trace_ahci_unmap_clb_address_null(ad->hba, ad->port_no);
-        return;
-    }
-    ad->port_regs.cmd &= ~PORT_CMD_LIST_ON;
     dma_memory_unmap(ad->hba->as, ad->lst, 1024,
                      DMA_DIRECTION_FROM_DEVICE, 1024);
     ad->lst = NULL;
@@ -736,7 +714,7 @@ static void ahci_write_fis_sdb(AHCIState *s, NCQTransferState *ncq_tfs)
 
     /* Trigger IRQ if interrupt bit is set (which currently, it always is) */
     if (sdb_fis->flags & 0x40) {
-        ahci_trigger_irq(s, ad, AHCI_PORT_IRQ_BIT_SDBS);
+        ahci_trigger_irq(s, ad, PORT_IRQ_SDB_FIS);
     }
 }
 
@@ -779,10 +757,10 @@ static void ahci_write_fis_pio(AHCIDevice *ad, uint16_t len)
         ad->port.ifs[0].status;
 
     if (pio_fis[2] & ERR_STAT) {
-        ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_TFES);
+        ahci_trigger_irq(ad->hba, ad, PORT_IRQ_TF_ERR);
     }
 
-    ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_PSS);
+    ahci_trigger_irq(ad->hba, ad, PORT_IRQ_PIOS_FIS);
 }
 
 static bool ahci_write_fis_d2h(AHCIDevice *ad)
@@ -822,10 +800,10 @@ static bool ahci_write_fis_d2h(AHCIDevice *ad)
         ad->port.ifs[0].status;
 
     if (d2h_fis[2] & ERR_STAT) {
-        ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_TFES);
+        ahci_trigger_irq(ad->hba, ad, PORT_IRQ_TF_ERR);
     }
 
-    ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_DHRS);
+    ahci_trigger_irq(ad->hba, ad, PORT_IRQ_D2H_REG_FIS);
     return true;
 }
 
@@ -867,22 +845,20 @@ static int ahci_populate_sglist(AHCIDevice *ad, QEMUSGList *sglist,
     IDEBus *bus = &ad->port;
     BusState *qbus = BUS(bus);
 
-    trace_ahci_populate_sglist(ad->hba, ad->port_no);
-
     if (!prdtl) {
-        trace_ahci_populate_sglist_no_prdtl(ad->hba, ad->port_no, opts);
+        DPRINTF(ad->port_no, "no sg list given by guest: 0x%08x\n", opts);
         return -1;
     }
 
     /* map PRDT */
     if (!(prdt = dma_memory_map(ad->hba->as, prdt_addr, &prdt_len,
                                 DMA_DIRECTION_TO_DEVICE))){
-        trace_ahci_populate_sglist_no_map(ad->hba, ad->port_no);
+        DPRINTF(ad->port_no, "map failed\n");
         return -1;
     }
 
     if (prdt_len < real_prdt_len) {
-        trace_ahci_populate_sglist_short_map(ad->hba, ad->port_no);
+        DPRINTF(ad->port_no, "mapped less than expected\n");
         r = -1;
         goto out;
     }
@@ -901,8 +877,9 @@ static int ahci_populate_sglist(AHCIDevice *ad, QEMUSGList *sglist,
             sum += tbl_entry_size;
         }
         if ((off_idx == -1) || (off_pos < 0) || (off_pos > tbl_entry_size)) {
-            trace_ahci_populate_sglist_bad_offset(ad->hba, ad->port_no,
-                                                  off_idx, off_pos);
+            DPRINTF(ad->port_no, "%s: Incorrect offset! "
+                            "off_idx: %d, off_pos: %"PRId64"\n",
+                            __func__, off_idx, off_pos);
             r = -1;
             goto out;
         }
@@ -933,8 +910,6 @@ static void ncq_err(NCQTransferState *ncq_tfs)
     ide_state->error = ABRT_ERR;
     ide_state->status = READY_STAT | ERR_STAT;
     ncq_tfs->drive->port_regs.scr_err |= (1 << ncq_tfs->tag);
-    qemu_sglist_destroy(&ncq_tfs->sglist);
-    ncq_tfs->used = 0;
 }
 
 static void ncq_finish(NCQTransferState *ncq_tfs)
@@ -948,8 +923,8 @@ static void ncq_finish(NCQTransferState *ncq_tfs)
 
     ahci_write_fis_sdb(ncq_tfs->drive->hba, ncq_tfs);
 
-    trace_ncq_finish(ncq_tfs->drive->hba, ncq_tfs->drive->port_no,
-                     ncq_tfs->tag);
+    DPRINTF(ncq_tfs->drive->port_no, "NCQ transfer tag %d finished\n",
+            ncq_tfs->tag);
 
     block_acct_done(blk_get_stats(ncq_tfs->drive->port.ifs[0].blk),
                     &ncq_tfs->acct);
@@ -962,7 +937,6 @@ static void ncq_cb(void *opaque, int ret)
     NCQTransferState *ncq_tfs = (NCQTransferState *)opaque;
     IDEState *ide_state = &ncq_tfs->drive->port.ifs[0];
 
-    ncq_tfs->aiocb = NULL;
     if (ret == -ECANCELED) {
         return;
     }
@@ -1013,28 +987,33 @@ static void execute_ncq_command(NCQTransferState *ncq_tfs)
 
     switch (ncq_tfs->cmd) {
     case READ_FPDMA_QUEUED:
-        trace_execute_ncq_command_read(ad->hba, port, ncq_tfs->tag,
-                                       ncq_tfs->sector_count, ncq_tfs->lba);
+        DPRINTF(port, "NCQ reading %d sectors from LBA %"PRId64", tag %d\n",
+                ncq_tfs->sector_count, ncq_tfs->lba, ncq_tfs->tag);
+
+        DPRINTF(port, "tag %d aio read %"PRId64"\n",
+                ncq_tfs->tag, ncq_tfs->lba);
+
         dma_acct_start(ide_state->blk, &ncq_tfs->acct,
                        &ncq_tfs->sglist, BLOCK_ACCT_READ);
         ncq_tfs->aiocb = dma_blk_read(ide_state->blk, &ncq_tfs->sglist,
-                                      ncq_tfs->lba << BDRV_SECTOR_BITS,
-                                      BDRV_SECTOR_SIZE,
-                                      ncq_cb, ncq_tfs);
+                                      ncq_tfs->lba, ncq_cb, ncq_tfs);
         break;
     case WRITE_FPDMA_QUEUED:
-        trace_execute_ncq_command_read(ad->hba, port, ncq_tfs->tag,
-                                       ncq_tfs->sector_count, ncq_tfs->lba);
+        DPRINTF(port, "NCQ writing %d sectors to LBA %"PRId64", tag %d\n",
+                ncq_tfs->sector_count, ncq_tfs->lba, ncq_tfs->tag);
+
+        DPRINTF(port, "tag %d aio write %"PRId64"\n",
+                ncq_tfs->tag, ncq_tfs->lba);
+
         dma_acct_start(ide_state->blk, &ncq_tfs->acct,
                        &ncq_tfs->sglist, BLOCK_ACCT_WRITE);
         ncq_tfs->aiocb = dma_blk_write(ide_state->blk, &ncq_tfs->sglist,
-                                       ncq_tfs->lba << BDRV_SECTOR_BITS,
-                                       BDRV_SECTOR_SIZE,
-                                       ncq_cb, ncq_tfs);
+                                       ncq_tfs->lba, ncq_cb, ncq_tfs);
         break;
     default:
-        trace_execute_ncq_command_unsup(ad->hba, port,
-                                        ncq_tfs->tag, ncq_tfs->cmd);
+        DPRINTF(port, "error: unsupported NCQ command (0x%02x) received\n",
+                ncq_tfs->cmd);
+        qemu_sglist_destroy(&ncq_tfs->sglist);
         ncq_err(ncq_tfs);
     }
 }
@@ -1044,6 +1023,7 @@ static void process_ncq_command(AHCIState *s, int port, uint8_t *cmd_fis,
                                 uint8_t slot)
 {
     AHCIDevice *ad = &s->dev[port];
+    IDEState *ide_state = &ad->port.ifs[0];
     NCQFrame *ncq_fis = (NCQFrame*)cmd_fis;
     uint8_t tag = ncq_fis->tag >> 3;
     NCQTransferState *ncq_tfs = &ad->ncq_tfs[tag];
@@ -1052,7 +1032,7 @@ static void process_ncq_command(AHCIState *s, int port, uint8_t *cmd_fis,
     g_assert(is_ncq(ncq_fis->command));
     if (ncq_tfs->used) {
         /* error - already in use */
-        fprintf(stderr, "%s: tag %d already used\n", __func__, tag);
+        fprintf(stderr, "%s: tag %d already used\n", __FUNCTION__, tag);
         return;
     }
 
@@ -1071,20 +1051,21 @@ static void process_ncq_command(AHCIState *s, int port, uint8_t *cmd_fis,
 
     /* Sanity-check the NCQ packet */
     if (tag != slot) {
-        trace_process_ncq_command_mismatch(s, port, tag, slot);
+        DPRINTF(port, "Warn: NCQ slot (%d) did not match the given tag (%d)\n",
+                slot, tag);
     }
 
     if (ncq_fis->aux0 || ncq_fis->aux1 || ncq_fis->aux2 || ncq_fis->aux3) {
-        trace_process_ncq_command_aux(s, port, tag);
+        DPRINTF(port, "Warn: Attempt to use NCQ auxiliary fields.\n");
     }
     if (ncq_fis->prio || ncq_fis->icc) {
-        trace_process_ncq_command_prioicc(s, port, tag);
+        DPRINTF(port, "Warn: Unsupported attempt to use PRIO/ICC fields\n");
     }
     if (ncq_fis->fua & NCQ_FIS_FUA_MASK) {
-        trace_process_ncq_command_fua(s, port, tag);
+        DPRINTF(port, "Warn: Unsupported attempt to use Force Unit Access\n");
     }
     if (ncq_fis->tag & NCQ_FIS_RARC_MASK) {
-        trace_process_ncq_command_rarc(s, port, tag);
+        DPRINTF(port, "Warn: Unsupported attempt to use Rebuild Assist\n");
     }
 
     ncq_tfs->sector_count = ((ncq_fis->sector_count_high << 8) |
@@ -1099,18 +1080,21 @@ static void process_ncq_command(AHCIState *s, int port, uint8_t *cmd_fis,
         error_report("ahci: PRDT length for NCQ command (0x%zx) "
                      "is smaller than the requested size (0x%zx)",
                      ncq_tfs->sglist.size, size);
+        qemu_sglist_destroy(&ncq_tfs->sglist);
         ncq_err(ncq_tfs);
-        ahci_trigger_irq(ad->hba, ad, AHCI_PORT_IRQ_BIT_OFS);
+        ahci_trigger_irq(ad->hba, ad, PORT_IRQ_OVERFLOW);
         return;
     } else if (ncq_tfs->sglist.size != size) {
-        trace_process_ncq_command_large(s, port, tag,
-                                        ncq_tfs->sglist.size, size);
+        DPRINTF(port, "Warn: PRDTL (0x%zx)"
+                " does not match requested size (0x%zx)",
+                ncq_tfs->sglist.size, size);
     }
 
-    trace_process_ncq_command(s, port, tag,
-                              ncq_fis->command,
-                              ncq_tfs->lba,
-                              ncq_tfs->lba + ncq_tfs->sector_count - 1);
+    DPRINTF(port, "NCQ transfer LBA from %"PRId64" to %"PRId64", "
+            "drive max %"PRId64"\n",
+            ncq_tfs->lba, ncq_tfs->lba + ncq_tfs->sector_count - 1,
+            ide_state->nb_sectors - 1);
+
     execute_ncq_command(ncq_tfs);
 }
 
@@ -1131,14 +1115,16 @@ static void handle_reg_h2d_fis(AHCIState *s, int port,
     uint16_t opts = le16_to_cpu(cmd->opts);
 
     if (cmd_fis[1] & 0x0F) {
-        trace_handle_reg_h2d_fis_pmp(s, port, cmd_fis[1],
-                                     cmd_fis[2], cmd_fis[3]);
+        DPRINTF(port, "Port Multiplier not supported."
+                " cmd_fis[0]=%02x cmd_fis[1]=%02x cmd_fis[2]=%02x\n",
+                cmd_fis[0], cmd_fis[1], cmd_fis[2]);
         return;
     }
 
     if (cmd_fis[1] & 0x70) {
-        trace_handle_reg_h2d_fis_res(s, port, cmd_fis[1],
-                                     cmd_fis[2], cmd_fis[3]);
+        DPRINTF(port, "Reserved flags set in H2D Register FIS."
+                " cmd_fis[0]=%02x cmd_fis[1]=%02x cmd_fis[2]=%02x\n",
+                cmd_fis[0], cmd_fis[1], cmd_fis[2]);
         return;
     }
 
@@ -1192,11 +1178,7 @@ static void handle_reg_h2d_fis(AHCIState *s, int port,
      * table to ide_state->io_buffer */
     if (opts & AHCI_CMD_ATAPI) {
         memcpy(ide_state->io_buffer, &cmd_fis[AHCI_COMMAND_TABLE_ACMD], 0x10);
-        if (trace_event_get_state_backends(TRACE_HANDLE_REG_H2D_FIS_DUMP)) {
-            char *pretty_fis = ahci_pretty_buffer_fis(ide_state->io_buffer, 0x10);
-            trace_handle_reg_h2d_fis_dump(s, port, pretty_fis);
-            g_free(pretty_fis);
-        }
+        debug_print_fis(ide_state->io_buffer, 0x10);
         s->dev[port].done_atapi_packet = false;
         /* XXX send PIO setup FIS */
     }
@@ -1220,12 +1202,12 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
 
     if (s->dev[port].port.ifs[0].status & (BUSY_STAT|DRQ_STAT)) {
         /* Engine currently busy, try again later */
-        trace_handle_cmd_busy(s, port);
+        DPRINTF(port, "engine busy\n");
         return -1;
     }
 
     if (!s->dev[port].lst) {
-        trace_handle_cmd_nolist(s, port);
+        DPRINTF(port, "error: lst not given but cmd handled");
         return -1;
     }
     cmd = get_cmd_header(s, port, slot);
@@ -1235,7 +1217,7 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
     /* The device we are working for */
     ide_state = &s->dev[port].port.ifs[0];
     if (!ide_state->blk) {
-        trace_handle_cmd_badport(s, port);
+        DPRINTF(port, "error: guest accessed unused port");
         return -1;
     }
 
@@ -1244,25 +1226,25 @@ static int handle_cmd(AHCIState *s, int port, uint8_t slot)
     cmd_fis = dma_memory_map(s->as, tbl_addr, &cmd_len,
                              DMA_DIRECTION_FROM_DEVICE);
     if (!cmd_fis) {
-        trace_handle_cmd_badfis(s, port);
+        DPRINTF(port, "error: guest passed us an invalid cmd fis\n");
         return -1;
     } else if (cmd_len != 0x80) {
-        ahci_trigger_irq(s, &s->dev[port], AHCI_PORT_IRQ_BIT_HBFS);
-        trace_handle_cmd_badmap(s, port, cmd_len);
+        ahci_trigger_irq(s, &s->dev[port], PORT_IRQ_HBUS_ERR);
+        DPRINTF(port, "error: dma_memory_map failed: "
+                "(len(%02"PRIx64") != 0x80)\n",
+                cmd_len);
         goto out;
     }
-    if (trace_event_get_state_backends(TRACE_HANDLE_CMD_FIS_DUMP)) {
-        char *pretty_fis = ahci_pretty_buffer_fis(cmd_fis, 0x80);
-        trace_handle_cmd_fis_dump(s, port, pretty_fis);
-        g_free(pretty_fis);
-    }
+    debug_print_fis(cmd_fis, 0x80);
+
     switch (cmd_fis[0]) {
         case SATA_FIS_TYPE_REGISTER_H2D:
             handle_reg_h2d_fis(s, port, slot, cmd_fis);
             break;
         default:
-            trace_handle_cmd_unhandled_fis(s, port,
-                                           cmd_fis[0], cmd_fis[1], cmd_fis[2]);
+            DPRINTF(port, "unknown command cmd_fis[0]=%02x cmd_fis[1]=%02x "
+                          "cmd_fis[2]=%02x\n", cmd_fis[0], cmd_fis[1],
+                          cmd_fis[2]);
             break;
     }
 
@@ -1303,9 +1285,9 @@ static void ahci_start_transfer(IDEDMA *dma)
         has_sglist = 1;
     }
 
-    trace_ahci_start_transfer(ad->hba, ad->port_no, is_write ? "writ" : "read",
-                              size, is_atapi ? "atapi" : "ata",
-                              has_sglist ? "" : "o");
+    DPRINTF(ad->port_no, "%sing %d bytes on %s w/%s sglist\n",
+            is_write ? "writ" : "read", size, is_atapi ? "atapi" : "ata",
+            has_sglist ? "" : "o");
 
     if (has_sglist && size) {
         if (is_write) {
@@ -1334,7 +1316,7 @@ static void ahci_start_dma(IDEDMA *dma, IDEState *s,
                            BlockCompletionFunc *dma_cb)
 {
     AHCIDevice *ad = DO_UPCAST(AHCIDevice, dma, dma);
-    trace_ahci_start_dma(ad->hba, ad->port_no);
+    DPRINTF(ad->port_no, "\n");
     s->io_buffer_offset = 0;
     dma_cb(s, 0);
 }
@@ -1372,12 +1354,12 @@ static int32_t ahci_dma_prepare_buf(IDEDMA *dma, int32_t limit)
 
     if (ahci_populate_sglist(ad, &s->sg, ad->cur_cmd,
                              limit, s->io_buffer_offset) == -1) {
-        trace_ahci_dma_prepare_buf_fail(ad->hba, ad->port_no);
+        DPRINTF(ad->port_no, "ahci_dma_prepare_buf failed.\n");
         return -1;
     }
     s->io_buffer_size = s->sg.size;
 
-    trace_ahci_dma_prepare_buf(ad->hba, ad->port_no, limit, s->io_buffer_size);
+    DPRINTF(ad->port_no, "len=%#x\n", s->io_buffer_size);
     return s->io_buffer_size;
 }
 
@@ -1413,9 +1395,11 @@ static int ahci_dma_rw_buf(IDEDMA *dma, int is_write)
 
     /* free sglist, update byte count */
     dma_buf_commit(s, l);
+
     s->io_buffer_index += l;
 
-    trace_ahci_dma_rw_buf(ad->hba, ad->port_no, l);
+    DPRINTF(ad->port_no, "len=%#x\n", l);
+
     return 1;
 }
 
@@ -1423,7 +1407,7 @@ static void ahci_cmd_done(IDEDMA *dma)
 {
     AHCIDevice *ad = DO_UPCAST(AHCIDevice, dma, dma);
 
-    trace_ahci_cmd_done(ad->hba, ad->port_no);
+    DPRINTF(ad->port_no, "cmd done\n");
 
     /* update d2h status */
     ahci_write_fis_d2h(ad);
@@ -1482,24 +1466,10 @@ void ahci_realize(AHCIState *s, DeviceState *qdev, AddressSpace *as, int ports)
         ad->port.dma->ops = &ahci_dma_ops;
         ide_register_restart_cb(&ad->port);
     }
-    g_free(irqs);
 }
 
 void ahci_uninit(AHCIState *s)
 {
-    int i, j;
-
-    for (i = 0; i < s->ports; i++) {
-        AHCIDevice *ad = &s->dev[i];
-
-        for (j = 0; j < 2; j++) {
-            IDEState *s = &ad->port.ifs[j];
-
-            ide_exit(s);
-        }
-        object_unparent(OBJECT(&ad->port));
-    }
-
     g_free(s->dev);
 }
 
@@ -1507,8 +1477,6 @@ void ahci_reset(AHCIState *s)
 {
     AHCIPortRegs *pr;
     int i;
-
-    trace_ahci_reset(s);
 
     s->control_regs.irqstatus = 0;
     /* AHCI Enable (AE)
@@ -1582,28 +1550,14 @@ static int ahci_state_post_load(void *opaque, int version_id)
     int i, j;
     struct AHCIDevice *ad;
     NCQTransferState *ncq_tfs;
-    AHCIPortRegs *pr;
     AHCIState *s = opaque;
 
     for (i = 0; i < s->ports; i++) {
         ad = &s->dev[i];
-        pr = &ad->port_regs;
 
-        if (!(pr->cmd & PORT_CMD_START) && (pr->cmd & PORT_CMD_LIST_ON)) {
-            error_report("AHCI: DMA engine should be off, but status bit "
-                         "indicates it is still running.");
-            return -1;
-        }
-        if (!(pr->cmd & PORT_CMD_FIS_RX) && (pr->cmd & PORT_CMD_FIS_ON)) {
-            error_report("AHCI: FIS RX engine should be off, but status bit "
-                         "indicates it is still running.");
-            return -1;
-        }
-
-        /* After a migrate, the DMA/FIS engines are "off" and
-         * need to be conditionally restarted */
-        pr->cmd &= ~(PORT_CMD_LIST_ON | PORT_CMD_FIS_ON);
-        if (ahci_cond_start_engines(ad) != 0) {
+        /* Only remap the CLB address if appropriate, disallowing a state
+         * transition from 'on' to 'off' it should be consistent here. */
+        if (ahci_cond_start_engines(ad, false) != 0) {
             return -1;
         }
 
@@ -1674,7 +1628,7 @@ const VMStateDescription vmstate_ahci = {
         VMSTATE_UINT32(control_regs.impl, AHCIState),
         VMSTATE_UINT32(control_regs.version, AHCIState),
         VMSTATE_UINT32(idp_index, AHCIState),
-        VMSTATE_INT32_EQUAL(ports, AHCIState, NULL),
+        VMSTATE_INT32_EQUAL(ports, AHCIState),
         VMSTATE_END_OF_LIST()
     },
 };
@@ -1736,20 +1690,107 @@ static const TypeInfo sysbus_ahci_info = {
     .class_init    = sysbus_ahci_class_init,
 };
 
+#define ALLWINNER_AHCI_BISTAFR    ((0xa0 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_BISTCR     ((0xa4 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_BISTFCTR   ((0xa8 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_BISTSR     ((0xac - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_BISTDECR   ((0xb0 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_DIAGNR0    ((0xb4 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_DIAGNR1    ((0xb8 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_OOBR       ((0xbc - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_PHYCS0R    ((0xc0 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_PHYCS1R    ((0xc4 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_PHYCS2R    ((0xc8 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_TIMER1MS   ((0xe0 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_GPARAM1R   ((0xe8 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_GPARAM2R   ((0xec - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_PPARAMR    ((0xf0 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_TESTR      ((0xf4 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_VERSIONR   ((0xf8 - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_IDR        ((0xfc - ALLWINNER_AHCI_MMIO_OFF) / 4)
+#define ALLWINNER_AHCI_RWCR       ((0xfc - ALLWINNER_AHCI_MMIO_OFF) / 4)
+
+static uint64_t allwinner_ahci_mem_read(void *opaque, hwaddr addr,
+                                        unsigned size)
+{
+    AllwinnerAHCIState *a = opaque;
+    uint64_t val = a->regs[addr/4];
+
+    switch (addr / 4) {
+    case ALLWINNER_AHCI_PHYCS0R:
+        val |= 0x2 << 28;
+        break;
+    case ALLWINNER_AHCI_PHYCS2R:
+        val &= ~(0x1 << 24);
+        break;
+    }
+    DPRINTF(-1, "addr=0x%" HWADDR_PRIx " val=0x%" PRIx64 ", size=%d\n",
+            addr, val, size);
+    return  val;
+}
+
+static void allwinner_ahci_mem_write(void *opaque, hwaddr addr,
+                                     uint64_t val, unsigned size)
+{
+    AllwinnerAHCIState *a = opaque;
+
+    DPRINTF(-1, "addr=0x%" HWADDR_PRIx " val=0x%" PRIx64 ", size=%d\n",
+            addr, val, size);
+    a->regs[addr/4] = val;
+}
+
+static const MemoryRegionOps allwinner_ahci_mem_ops = {
+    .read = allwinner_ahci_mem_read,
+    .write = allwinner_ahci_mem_write,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+};
+
+static void allwinner_ahci_init(Object *obj)
+{
+    SysbusAHCIState *s = SYSBUS_AHCI(obj);
+    AllwinnerAHCIState *a = ALLWINNER_AHCI(obj);
+
+    memory_region_init_io(&a->mmio, OBJECT(obj), &allwinner_ahci_mem_ops, a,
+                          "allwinner-ahci", ALLWINNER_AHCI_MMIO_SIZE);
+    memory_region_add_subregion(&s->ahci.mem, ALLWINNER_AHCI_MMIO_OFF,
+                                &a->mmio);
+}
+
+static const VMStateDescription vmstate_allwinner_ahci = {
+    .name = "allwinner-ahci",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(regs, AllwinnerAHCIState,
+                             ALLWINNER_AHCI_MMIO_SIZE/4),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void allwinner_ahci_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+
+    dc->vmsd = &vmstate_allwinner_ahci;
+}
+
+static const TypeInfo allwinner_ahci_info = {
+    .name          = TYPE_ALLWINNER_AHCI,
+    .parent        = TYPE_SYSBUS_AHCI,
+    .instance_size = sizeof(AllwinnerAHCIState),
+    .instance_init = allwinner_ahci_init,
+    .class_init    = allwinner_ahci_class_init,
+};
+
 static void sysbus_ahci_register_types(void)
 {
     type_register_static(&sysbus_ahci_info);
+    type_register_static(&allwinner_ahci_info);
 }
 
 type_init(sysbus_ahci_register_types)
-
-int32_t ahci_get_num_ports(PCIDevice *dev)
-{
-    AHCIPCIState *d = ICH_AHCI(dev);
-    AHCIState *ahci = &d->ahci;
-
-    return ahci->ports;
-}
 
 void ahci_ide_create_devs(PCIDevice *dev, DriveInfo **hd)
 {

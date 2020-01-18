@@ -27,12 +27,10 @@
  *
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "hw/sysbus.h"
-#include "sysemu/hw_accel.h"
 #include "sysemu/sysemu.h"
-#include "e500.h"
+#include "hw/sysbus.h"
+#include "sysemu/kvm.h"
 
 #define MAX_CPUS 32
 
@@ -54,9 +52,14 @@ typedef struct SpinState {
     SpinInfo spin[MAX_CPUS];
 } SpinState;
 
-static void spin_reset(DeviceState *dev)
+typedef struct spin_kick {
+    PowerPCCPU *cpu;
+    SpinInfo *spin;
+} SpinKick;
+
+static void spin_reset(void *opaque)
 {
-    SpinState *s = E500_SPIN(dev);
+    SpinState *s = opaque;
     int i;
 
     for (i = 0; i < MAX_CPUS; i++) {
@@ -66,6 +69,12 @@ static void spin_reset(DeviceState *dev)
         stq_p(&info->r3, i);
         stq_p(&info->addr, 1);
     }
+}
+
+/* Create -kernel TLB entries for BookE, linearly spanning 256MB.  */
+static inline hwaddr booke206_page_size_to_tlb(uint64_t size)
+{
+    return ctz32(size >> 10) >> 1;
 }
 
 static void mmubooke_create_initial_mapping(CPUPPCState *env,
@@ -84,16 +93,17 @@ static void mmubooke_create_initial_mapping(CPUPPCState *env,
     env->tlb_dirty = true;
 }
 
-static void spin_kick(CPUState *cs, run_on_cpu_data data)
+static void spin_kick(void *data)
 {
-    PowerPCCPU *cpu = POWERPC_CPU(cs);
-    CPUPPCState *env = &cpu->env;
-    SpinInfo *curspin = data.host_ptr;
+    SpinKick *kick = data;
+    CPUState *cpu = CPU(kick->cpu);
+    CPUPPCState *env = &kick->cpu->env;
+    SpinInfo *curspin = kick->spin;
     hwaddr map_size = 64 * 1024 * 1024;
     hwaddr map_start;
 
-    cpu_synchronize_state(cs);
-    stl_p(&curspin->pir, env->spr[SPR_BOOKE_PIR]);
+    cpu_synchronize_state(cpu);
+    stl_p(&curspin->pir, env->spr[SPR_PIR]);
     env->nip = ldq_p(&curspin->addr) & (map_size - 1);
     env->gpr[3] = ldq_p(&curspin->r3);
     env->gpr[4] = 0;
@@ -106,10 +116,10 @@ static void spin_kick(CPUState *cs, run_on_cpu_data data)
     map_start = ldq_p(&curspin->addr) & ~(map_size - 1);
     mmubooke_create_initial_mapping(env, 0, map_start, map_size);
 
-    cs->halted = 0;
-    cs->exception_index = -1;
-    cs->stopped = false;
-    qemu_cpu_kick(cs);
+    cpu->halted = 0;
+    cpu->exception_index = -1;
+    cpu->stopped = false;
+    qemu_cpu_kick(cpu);
 }
 
 static void spin_write(void *opaque, hwaddr addr, uint64_t value,
@@ -147,7 +157,12 @@ static void spin_write(void *opaque, hwaddr addr, uint64_t value,
 
     if (!(ldq_p(&curspin->addr) & 1)) {
         /* run CPU */
-        run_on_cpu(cpu, spin_kick, RUN_ON_CPU_HOST_PTR(curspin));
+        SpinKick kick = {
+            .cpu = POWERPC_CPU(cpu),
+            .spin = curspin,
+        };
+
+        run_on_cpu(cpu, spin_kick, &kick);
     }
 }
 
@@ -174,28 +189,30 @@ static const MemoryRegionOps spin_rw_ops = {
     .endianness = DEVICE_BIG_ENDIAN,
 };
 
-static void ppce500_spin_initfn(Object *obj)
+static int ppce500_spin_initfn(SysBusDevice *dev)
 {
-    SysBusDevice *dev = SYS_BUS_DEVICE(obj);
     SpinState *s = E500_SPIN(dev);
 
-    memory_region_init_io(&s->iomem, obj, &spin_rw_ops, s,
+    memory_region_init_io(&s->iomem, OBJECT(s), &spin_rw_ops, s,
                           "e500 spin pv device", sizeof(SpinInfo) * MAX_CPUS);
     sysbus_init_mmio(dev, &s->iomem);
+
+    qemu_register_reset(spin_reset, s);
+
+    return 0;
 }
 
 static void ppce500_spin_class_init(ObjectClass *klass, void *data)
 {
-    DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
-    dc->reset = spin_reset;
+    k->init = ppce500_spin_initfn;
 }
 
 static const TypeInfo ppce500_spin_info = {
     .name          = TYPE_E500_SPIN,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(SpinState),
-    .instance_init = ppce500_spin_initfn,
     .class_init    = ppce500_spin_class_init,
 };
 

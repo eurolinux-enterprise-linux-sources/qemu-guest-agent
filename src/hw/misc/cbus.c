@@ -20,8 +20,7 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "hw/hw.h"
+#include "qemu-common.h"
 #include "hw/irq.h"
 #include "hw/devices.h"
 #include "sysemu/sysemu.h"
@@ -62,7 +61,7 @@ static void cbus_io(CBusPriv *s)
         s->slave[s->addr]->io(s->slave[s->addr]->opaque,
                         s->rw, s->reg, &s->val);
     else
-        hw_error("%s: bad slave address %i\n", __func__, s->addr);
+        hw_error("%s: bad slave address %i\n", __FUNCTION__, s->addr);
 }
 
 static void cbus_cycle(CBusPriv *s)
@@ -299,7 +298,7 @@ static inline uint16_t retu_read(CBusRetu *s, int reg)
         return 0x0000;
 
     default:
-        hw_error("%s: bad register %02x\n", __func__, reg);
+        hw_error("%s: bad register %02x\n", __FUNCTION__, reg);
     }
 }
 
@@ -356,7 +355,7 @@ static inline void retu_write(CBusRetu *s, int reg, uint16_t val)
 
     case RETU_REG_WATCHDOG:
         if (val == 0 && (s->cc[0] & 2))
-            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+            qemu_system_shutdown_request();
         break;
 
     case RETU_REG_TXCR:
@@ -372,7 +371,7 @@ static inline void retu_write(CBusRetu *s, int reg, uint16_t val)
         break;
 
     default:
-        hw_error("%s: bad register %02x\n", __func__, reg);
+        hw_error("%s: bad register %02x\n", __FUNCTION__, reg);
     }
 }
 
@@ -538,7 +537,7 @@ static inline uint16_t tahvo_read(CBusTahvo *s, int reg)
         return 0x0000;
 
     default:
-        hw_error("%s: bad register %02x\n", __func__, reg);
+        hw_error("%s: bad register %02x\n", __FUNCTION__, reg);
     }
 }
 
@@ -567,7 +566,7 @@ static inline void tahvo_write(CBusTahvo *s, int reg, uint16_t val)
         if (s->backlight != (val & 0x7f)) {
             s->backlight = val & 0x7f;
             printf("%s: LCD backlight now at %i / 127\n",
-                            __func__, s->backlight);
+                            __FUNCTION__, s->backlight);
         }
         break;
 
@@ -588,7 +587,7 @@ static inline void tahvo_write(CBusTahvo *s, int reg, uint16_t val)
         break;
 
     default:
-        hw_error("%s: bad register %02x\n", __func__, reg);
+        hw_error("%s: bad register %02x\n", __FUNCTION__, reg);
     }
 }
 

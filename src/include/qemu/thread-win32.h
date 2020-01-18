@@ -1,38 +1,25 @@
-#ifndef QEMU_THREAD_WIN32_H
-#define QEMU_THREAD_WIN32_H
-
-#include <windows.h>
+#ifndef __QEMU_THREAD_WIN32_H
+#define __QEMU_THREAD_WIN32_H 1
+#include "windows.h"
 
 struct QemuMutex {
-    SRWLOCK lock;
-    bool initialized;
-};
-
-typedef struct QemuRecMutex QemuRecMutex;
-struct QemuRecMutex {
     CRITICAL_SECTION lock;
-    bool initialized;
+    LONG owner;
 };
-
-void qemu_rec_mutex_destroy(QemuRecMutex *mutex);
-void qemu_rec_mutex_lock(QemuRecMutex *mutex);
-int qemu_rec_mutex_trylock(QemuRecMutex *mutex);
-void qemu_rec_mutex_unlock(QemuRecMutex *mutex);
 
 struct QemuCond {
-    CONDITION_VARIABLE var;
-    bool initialized;
+    LONG waiters, target;
+    HANDLE sema;
+    HANDLE continue_event;
 };
 
 struct QemuSemaphore {
     HANDLE sema;
-    bool initialized;
 };
 
 struct QemuEvent {
     int value;
     HANDLE event;
-    bool initialized;
 };
 
 typedef struct QemuThreadData QemuThreadData;

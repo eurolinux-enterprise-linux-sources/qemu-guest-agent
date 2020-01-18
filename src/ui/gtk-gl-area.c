@@ -7,7 +7,6 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 
 #include "trace.h"
@@ -26,7 +25,14 @@ static void gtk_gl_area_set_scanout_mode(VirtualConsole *vc, bool scanout)
 
     vc->gfx.scanout_mode = scanout;
     if (!vc->gfx.scanout_mode) {
-        egl_fb_destroy(&vc->gfx.guest_fb);
+        if (vc->gfx.fbo_id) {
+            glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT,
+                                      GL_COLOR_ATTACHMENT0_EXT,
+                                      GL_TEXTURE_2D, 0, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+            glDeleteFramebuffers(1, &vc->gfx.fbo_id);
+            vc->gfx.fbo_id = 0;
+        }
         if (vc->gfx.surface) {
             surface_gl_destroy_texture(vc->gfx.gls, vc->gfx.ds);
             surface_gl_create_texture(vc->gfx.gls, vc->gfx.ds);
@@ -49,11 +55,11 @@ void gd_gl_area_draw(VirtualConsole *vc)
     wh = gtk_widget_get_allocated_height(vc->gfx.drawing_area);
 
     if (vc->gfx.scanout_mode) {
-        if (!vc->gfx.guest_fb.framebuffer) {
+        if (!vc->gfx.fbo_id) {
             return;
         }
 
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, vc->gfx.guest_fb.framebuffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, vc->gfx.fbo_id);
         /* GtkGLArea sets GL_DRAW_FRAMEBUFFER for us */
 
         glViewport(0, 0, ww, wh);
@@ -96,7 +102,7 @@ void gd_gl_area_refresh(DisplayChangeListener *dcl)
             return;
         }
         gtk_gl_area_make_current(GTK_GL_AREA(vc->gfx.drawing_area));
-        vc->gfx.gls = qemu_gl_init_shader();
+        vc->gfx.gls = console_gl_init_context();
         if (vc->gfx.ds) {
             surface_gl_create_texture(vc->gfx.gls, vc->gfx.ds);
         }
@@ -160,13 +166,10 @@ void gd_gl_area_destroy_context(DisplayChangeListener *dcl, QEMUGLContext ctx)
     /* FIXME */
 }
 
-void gd_gl_area_scanout_texture(DisplayChangeListener *dcl,
-                                uint32_t backing_id,
-                                bool backing_y_0_top,
-                                uint32_t backing_width,
-                                uint32_t backing_height,
-                                uint32_t x, uint32_t y,
-                                uint32_t w, uint32_t h)
+void gd_gl_area_scanout(DisplayChangeListener *dcl,
+                        uint32_t backing_id, bool backing_y_0_top,
+                        uint32_t x, uint32_t y,
+                        uint32_t w, uint32_t h)
 {
     VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
 
@@ -174,18 +177,24 @@ void gd_gl_area_scanout_texture(DisplayChangeListener *dcl,
     vc->gfx.y = y;
     vc->gfx.w = w;
     vc->gfx.h = h;
+    vc->gfx.tex_id = backing_id;
     vc->gfx.y0_top = backing_y_0_top;
 
     gtk_gl_area_make_current(GTK_GL_AREA(vc->gfx.drawing_area));
 
-    if (backing_id == 0 || vc->gfx.w == 0 || vc->gfx.h == 0) {
+    if (vc->gfx.tex_id == 0 || vc->gfx.w == 0 || vc->gfx.h == 0) {
         gtk_gl_area_set_scanout_mode(vc, false);
         return;
     }
 
     gtk_gl_area_set_scanout_mode(vc, true);
-    egl_fb_setup_for_tex(&vc->gfx.guest_fb, backing_width, backing_height,
-                         backing_id, false);
+    if (!vc->gfx.fbo_id) {
+        glGenFramebuffers(1, &vc->gfx.fbo_id);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER_EXT, vc->gfx.fbo_id);
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT,
+                              GL_TEXTURE_2D, vc->gfx.tex_id, 0);
 }
 
 void gd_gl_area_scanout_flush(DisplayChangeListener *dcl,

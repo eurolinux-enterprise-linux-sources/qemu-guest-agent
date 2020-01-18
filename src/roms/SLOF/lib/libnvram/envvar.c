@@ -17,7 +17,7 @@
 #include "nvram.h"
 
 /* returns the offset of the first byte after the searched envvar */
-static int get_past_env_pos(partition_t part, char *envvar, int evlen)
+static int get_past_env_pos(partition_t part, char *envvar)
 {
 	int offset, len;
 	static char temp[256];
@@ -32,7 +32,7 @@ static int get_past_env_pos(partition_t part, char *envvar, int evlen)
 		while((data=nvram_read_byte(offset++)) && len < 256) {
 			temp[len++]=data;
 		}
-		if (!strncmp(envvar, temp, evlen)) {
+		if (!strncmp(envvar, temp, strlen(envvar))) {
 			return offset;
 		}
 	} while (len);
@@ -43,16 +43,16 @@ static int get_past_env_pos(partition_t part, char *envvar, int evlen)
 /**
  * @param partition name of the envvar partition
  * @param envvar name of the environment variable
- * @param evlen string length of the envvar parameter
  * @return pointer to temporary string containing the value of envvar
  */
-char *nvram_get_env(partition_t part, char *envvar, int evlen)
+
+char *get_env(partition_t part, char *envvar)
 {
 	static char temp[256+1];
 	int len, offset;
 	uint8_t data;
 
-	DEBUG("nvram_get_env %p... ", envvar);
+	DEBUG("get_env %s... ", envvar);
 	if(!part.addr) {
 		/* ERROR: No environment variable partition */
 		DEBUG("invalid partition.\n");
@@ -68,7 +68,7 @@ char *nvram_get_env(partition_t part, char *envvar, int evlen)
 		}
 		temp[len]=0;
 
-		if (!strncmp(envvar, temp, evlen)) {
+		if (!strncmp(envvar, temp, strlen(envvar))) {
 			int pos=0;
 			while (temp[pos]!='=' && pos < len) pos++;
 			// DEBUG("value='%s'\n", temp+pos+1); 
@@ -100,7 +100,7 @@ static int find_last_envvar(partition_t part)
 	return -1;
 }
 
-int nvram_add_env(partition_t part, char *envvar, int evlen, char *value, int vallen)
+int add_env(partition_t part, char *envvar, char *value)
 {
 	int freespace, last, len, offset;
 	unsigned int i;
@@ -112,7 +112,7 @@ int nvram_add_env(partition_t part, char *envvar, int evlen, char *value, int va
 	freespace = part.addr+part.len-last;
 
 	/* how long is the entry we want to write? */
-	len = evlen + vallen + 2;
+	len = strlen(envvar) + strlen(value) + 2;
 
 	if(freespace<len) {
 		// TODO try to increase partition size
@@ -121,18 +121,18 @@ int nvram_add_env(partition_t part, char *envvar, int evlen, char *value, int va
 
 	offset=last;
 
-	for (i = 0; i < evlen; i++)
+	for(i=0; i<strlen(envvar); i++)
 		nvram_write_byte(offset++, envvar[i]);
 
 	nvram_write_byte(offset++, '=');
 
-	for (i = 0; i < vallen; i++)
+	for(i=0; i<strlen(value); i++)
 		nvram_write_byte(offset++, value[i]);
 
 	return 0;
 }
 
-int nvram_del_env(partition_t part, char *envvar, int evlen)
+int del_env(partition_t part, char *envvar)
 {
 	int last, current, pos, i;
 	char *buffer;
@@ -141,7 +141,7 @@ int nvram_del_env(partition_t part, char *envvar, int evlen)
 		return -1;
 
 	last=find_last_envvar(part);
-	current = pos = get_past_env_pos(part, envvar, evlen);
+	current = pos = get_past_env_pos(part, envvar);
 	
 	// TODO is this really required?
 	/* go back to non-0 value */
@@ -168,25 +168,25 @@ int nvram_del_env(partition_t part, char *envvar, int evlen)
 	return 0;
 }
 
-int nvram_set_env(partition_t part, char *envvar, int evlen, char *value, int vallen)
+int set_env(partition_t part, char *envvar, char *value)
 {
 	char *oldvalue, *buffer;
 	int last, current, buffersize, i;
 
-	DEBUG("nvram_set_env %lx[%lx]: %p=>%p\n", part.addr, part.len, envvar, value);
+	DEBUG("set_env %lx[%lx]: %s=%s\n", part.addr, part.len, envvar, value);
 
 	if(!part.addr)
 		return -1;
 
 	/* Check whether the environment variable exists already */
-	oldvalue = nvram_get_env(part, envvar, evlen);
+	oldvalue = get_env(part, envvar);
 
-	if (oldvalue == NULL)
-		return nvram_add_env(part, envvar, evlen, value, vallen);
+	if(oldvalue==NULL)
+		return add_env(part, envvar, value);
 
 
 	/* The value did not change. So we succeeded! */
-	if (strlen(oldvalue) == vallen && !strncmp(oldvalue, value, vallen))
+	if(!strncmp(oldvalue, value, strlen(value)+1))
 		return 0;
 
 	/* we need to overwrite environment variables, back them up first */
@@ -195,7 +195,7 @@ int nvram_set_env(partition_t part, char *envvar, int evlen, char *value, int va
 
 	/* allocate a buffer */
 	last=find_last_envvar(part);
-	current = get_past_env_pos(part, envvar, evlen);
+	current=get_past_env_pos(part, envvar);
 	buffersize = last - current;
 	buffer=get_nvram_buffer(buffersize);
 	if(!buffer)
@@ -214,7 +214,7 @@ int nvram_set_env(partition_t part, char *envvar, int evlen, char *value, int va
 	current++;
 
 	/* Write the new value */
-	for(i = 0; i < vallen; i++) {
+	for(i=0; i<(int)strlen(value); i++) {
 		nvram_write_byte(current++, value[i]);
 	}
 	

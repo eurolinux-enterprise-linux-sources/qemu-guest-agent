@@ -18,10 +18,11 @@
  *
  */
 
-#ifndef QCRYPTO_TLSCREDS_H
-#define QCRYPTO_TLSCREDS_H
+#ifndef QCRYPTO_TLSCRED_H__
+#define QCRYPTO_TLSCRED_H__
 
-#include "qapi/qapi-types-crypto.h"
+#include "qemu-common.h"
+#include "qapi/error.h"
 #include "qom/object.h"
 
 #ifdef CONFIG_GNUTLS
@@ -55,7 +56,6 @@ struct QCryptoTLSCreds {
     gnutls_dh_params_t dh_params;
 #endif
     bool verifyPeer;
-    char *priority;
 };
 
 
@@ -64,4 +64,5 @@ struct QCryptoTLSCredsClass {
 };
 
 
-#endif /* QCRYPTO_TLSCREDS_H */
+#endif /* QCRYPTO_TLSCRED_H__ */
+

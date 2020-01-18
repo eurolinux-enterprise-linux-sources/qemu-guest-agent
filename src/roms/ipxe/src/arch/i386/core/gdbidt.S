@@ -15,27 +15,39 @@
 /* POSIX signal numbers for reporting traps to GDB */
 #define SIGILL 4
 #define SIGTRAP 5
+#define SIGBUS 7
 #define SIGFPE 8
+#define SIGSEGV 11
 #define SIGSTKFLT 16
 
-	.globl	gdbmach_sigfpe
-gdbmach_sigfpe:
+	.globl	gdbmach_nocode_sigfpe
+gdbmach_nocode_sigfpe:
 	pushl	$SIGFPE
 	jmp	gdbmach_interrupt
 
-	.globl	gdbmach_sigtrap
-gdbmach_sigtrap:
+	.globl	gdbmach_nocode_sigtrap
+gdbmach_nocode_sigtrap:
 	pushl	$SIGTRAP
 	jmp	gdbmach_interrupt
 
-	.globl	gdbmach_sigstkflt
-gdbmach_sigstkflt:
+	.globl	gdbmach_nocode_sigstkflt
+gdbmach_nocode_sigstkflt:
 	pushl	$SIGSTKFLT
 	jmp	gdbmach_interrupt
 
-	.globl	gdbmach_sigill
-gdbmach_sigill:
+	.globl	gdbmach_nocode_sigill
+gdbmach_nocode_sigill:
 	pushl	$SIGILL
+	jmp	gdbmach_interrupt
+
+	.globl	gdbmach_withcode_sigbus
+gdbmach_withcode_sigbus:
+	movl	$SIGBUS, (%esp)
+	jmp	gdbmach_interrupt
+
+	.globl	gdbmach_withcode_sigsegv
+gdbmach_withcode_sigsegv:
+	movl	$SIGSEGV, (%esp)
 	jmp	gdbmach_interrupt
 
 /* When invoked, the stack contains: eflags, cs, eip, signo. */

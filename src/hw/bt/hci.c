@@ -18,9 +18,6 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qemu/error-report.h"
-#include "qapi/error.h"
 #include "qemu-common.h"
 #include "qemu/timer.h"
 #include "hw/usb.h"
@@ -28,7 +25,6 @@
 #include "hw/bt.h"
 #include "qapi/qmp/qerror.h"
 #include "sysemu/replay.h"
-#include "qemu/cutils.h"
 
 struct bt_hci_s {
     uint8_t *(*evt_packet)(void *opaque);
@@ -422,12 +418,16 @@ static void bt_submit_raw_acl(struct bt_piconet_s *net, int length, uint8_t *dat
 
 /* HCI layer emulation */
 
-/* Note: we could ignore endianness because unswapped handles will still
+/* Note: we could ignore endiannes because unswapped handles will still
  * be valid as connection identifiers for the guest - they don't have to
  * be continuously allocated.  We do it though, to preserve similar
  * behaviour between hosts.  Some things, like the BD_ADDR cannot be
  * preserved though (for example if a real hci is used).  */
-#define HNDL(raw) cpu_to_le16(raw)
+#ifdef HOST_WORDS_BIGENDIAN
+# define HNDL(raw)	bswap16(raw)
+#else
+# define HNDL(raw)	(raw)
+#endif
 
 static const uint8_t bt_event_reserved_mask[8] = {
     0xff, 0x9f, 0xfb, 0xff, 0x07, 0x18, 0x00, 0x00,
@@ -458,7 +458,8 @@ static inline uint8_t *bt_hci_event_start(struct bt_hci_s *hci,
     int mask_byte;
 
     if (len > 255) {
-        error_report("%s: HCI event params too long (%ib)", __func__, len);
+        fprintf(stderr, "%s: HCI event params too long (%ib)\n",
+                        __FUNCTION__, len);
         exit(-1);
     }
 
@@ -589,8 +590,8 @@ static void bt_hci_inquiry_result(struct bt_hci_s *hci,
         bt_hci_inquiry_result_with_rssi(hci, slave);
         return;
     default:
-        error_report("%s: bad inquiry mode %02x", __func__,
-                     hci->lm.inquiry_mode);
+        fprintf(stderr, "%s: bad inquiry mode %02x\n", __FUNCTION__,
+                        hci->lm.inquiry_mode);
         exit(-1);
     }
 }
@@ -1500,8 +1501,8 @@ static void bt_submit_hci(struct HCIInfo *info,
         return;
 
 #define PARAM(cmd, param)	(((cmd##_cp *) data)->param)
-#define PARAM16(cmd, param) lduw_le_p(&PARAM(cmd, param))
-#define PARAMHANDLE(cmd) PARAM16(cmd, handle)
+#define PARAM16(cmd, param)	le16_to_cpup(&PARAM(cmd, param))
+#define PARAMHANDLE(cmd)	HNDL(PARAM(cmd, handle))
 #define LENGTH_CHECK(cmd)	if (length < sizeof(cmd##_cp)) goto short_hci
     /* Note: the supported commands bitmask in bt_hci_read_local_commands_rp
      * needs to be updated every time a command is implemented here!  */
@@ -1528,7 +1529,7 @@ static void bt_submit_hci(struct HCIInfo *info,
                             "the Inquiry command has been issued, a Command "
                             "Status event has been received for the Inquiry "
                             "command, and before the Inquiry Complete event "
-                            "occurs", __func__);
+                            "occurs", __FUNCTION__);
             bt_hci_event_complete_status(hci, HCI_COMMAND_DISALLOWED);
             break;
         }
@@ -1567,7 +1568,7 @@ static void bt_submit_hci(struct HCIInfo *info,
                             "the Inquiry command has been issued, a Command "
                             "Status event has been received for the Inquiry "
                             "command, and before the Inquiry Complete event "
-                            "occurs", __func__);
+                            "occurs", __FUNCTION__);
             bt_hci_event_complete_status(hci, HCI_COMMAND_DISALLOWED);
             break;
         }
@@ -1971,7 +1972,8 @@ static void bt_submit_hci(struct HCIInfo *info,
         break;
 
     short_hci:
-        error_report("%s: HCI packet too short (%iB)", __func__, length);
+        fprintf(stderr, "%s: HCI packet too short (%iB)\n",
+                        __FUNCTION__, length);
         bt_hci_event_status(hci, HCI_INVALID_PARAMETERS);
         break;
     }
@@ -1990,8 +1992,8 @@ static inline void bt_hci_lmp_acl_data(struct bt_hci_s *hci, uint16_t handle,
     /* TODO: avoid memcpy'ing */
 
     if (len + HCI_ACL_HDR_SIZE > sizeof(hci->acl_buf)) {
-        error_report("%s: can't take ACL packets %i bytes long",
-                     __func__, len);
+        fprintf(stderr, "%s: can't take ACL packets %i bytes long\n",
+                        __FUNCTION__, len);
         return;
     }
     memcpy(hci->acl_buf + HCI_ACL_HDR_SIZE, data, len);
@@ -2028,7 +2030,8 @@ static void bt_submit_acl(struct HCIInfo *info,
     struct bt_link_s *link;
 
     if (length < HCI_ACL_HDR_SIZE) {
-        error_report("%s: ACL packet too short (%iB)", __func__, length);
+        fprintf(stderr, "%s: ACL packet too short (%iB)\n",
+                        __FUNCTION__, length);
         return;
     }
 
@@ -2039,15 +2042,16 @@ static void bt_submit_acl(struct HCIInfo *info,
     length -= HCI_ACL_HDR_SIZE;
 
     if (bt_hci_handle_bad(hci, handle)) {
-        error_report("%s: invalid ACL handle %03x", __func__, handle);
+        fprintf(stderr, "%s: invalid ACL handle %03x\n",
+                        __FUNCTION__, handle);
         /* TODO: signal an error */
         return;
     }
     handle &= ~HCI_HANDLE_OFFSET;
 
     if (datalen > length) {
-        error_report("%s: ACL packet too short (%iB < %iB)",
-                     __func__, length, datalen);
+        fprintf(stderr, "%s: ACL packet too short (%iB < %iB)\n",
+                        __FUNCTION__, length, datalen);
         return;
     }
 
@@ -2057,8 +2061,8 @@ static void bt_submit_acl(struct HCIInfo *info,
         if (!hci->asb_handle)
             hci->asb_handle = handle;
         else if (handle != hci->asb_handle) {
-            error_report("%s: Bad handle %03x in Active Slave Broadcast",
-                         __func__, handle);
+            fprintf(stderr, "%s: Bad handle %03x in Active Slave Broadcast\n",
+                            __FUNCTION__, handle);
             /* TODO: signal an error */
             return;
         }
@@ -2070,8 +2074,8 @@ static void bt_submit_acl(struct HCIInfo *info,
         if (!hci->psb_handle)
             hci->psb_handle = handle;
         else if (handle != hci->psb_handle) {
-            error_report("%s: Bad handle %03x in Parked Slave Broadcast",
-                            __func__, handle);
+            fprintf(stderr, "%s: Bad handle %03x in Parked Slave Broadcast\n",
+                            __FUNCTION__, handle);
             /* TODO: signal an error */
             return;
         }
@@ -2102,13 +2106,14 @@ static void bt_submit_sco(struct HCIInfo *info,
     length -= 3;
 
     if (bt_hci_handle_bad(hci, handle)) {
-        error_report("%s: invalid SCO handle %03x", __func__, handle);
+        fprintf(stderr, "%s: invalid SCO handle %03x\n",
+                        __FUNCTION__, handle);
         return;
     }
 
     if (datalen > length) {
-        error_report("%s: SCO packet too short (%iB < %iB)",
-                     __func__, length, datalen);
+        fprintf(stderr, "%s: SCO packet too short (%iB < %iB)\n",
+                        __FUNCTION__, length, datalen);
         return;
     }
 
@@ -2219,7 +2224,7 @@ struct HCIInfo *hci_init(const char *str)
            return bt_new_hci(vlan);
     }
 
-    error_report("Unknown bluetooth HCI `%s'.", str);
+    fprintf(stderr, "qemu: Unknown bluetooth HCI `%s'.\n", str);
 
     return 0;
 }

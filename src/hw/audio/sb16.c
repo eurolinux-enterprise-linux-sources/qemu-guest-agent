@@ -21,16 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "hw/audio/soundhw.h"
+#include "hw/audio/audio.h"
 #include "audio/audio.h"
 #include "hw/isa/isa.h"
 #include "hw/qdev.h"
 #include "qemu/timer.h"
 #include "qemu/host-utils.h"
-#include "qemu/log.h"
-#include "qapi/error.h"
 
 #define dolog(...) AUD_log ("sb16", __VA_ARGS__)
 
@@ -58,8 +55,6 @@ typedef struct SB16State {
     uint32_t hdma;
     uint32_t port;
     uint32_t ver;
-    IsaDma *isa_dma;
-    IsaDma *isa_hdma;
 
     int in_index;
     int out_data_len;
@@ -108,7 +103,6 @@ typedef struct SB16State {
     /* mixer state */
     int mixer_nreg;
     uint8_t mixer_regs[256];
-    PortioList portio_list;
 } SB16State;
 
 static void SB_audio_callback (void *opaque, int free);
@@ -125,7 +119,7 @@ static int magic_of_irq (int irq)
     case 10:
         return 8;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR, "bad irq %d\n", irq);
+        dolog ("bad irq %d\n", irq);
         return 2;
     }
 }
@@ -142,7 +136,7 @@ static int irq_of_magic (int magic)
     case 8:
         return 10;
     default:
-        qemu_log_mask(LOG_GUEST_ERROR, "bad irq magic %d\n", magic);
+        dolog ("bad irq magic %d\n", magic);
         return -1;
     }
 }
@@ -171,18 +165,16 @@ static void speaker (SB16State *s, int on)
 static void control (SB16State *s, int hold)
 {
     int dma = s->use_hdma ? s->hdma : s->dma;
-    IsaDma *isa_dma = s->use_hdma ? s->isa_hdma : s->isa_dma;
-    IsaDmaClass *k = ISADMA_GET_CLASS(isa_dma);
     s->dma_running = hold;
 
     ldebug ("hold %d high %d dma %d\n", hold, s->use_hdma, dma);
 
     if (hold) {
-        k->hold_DREQ(isa_dma, dma);
+        DMA_hold_DREQ (dma);
         AUD_set_active_out (s->voice, 1);
     }
     else {
-        k->release_DREQ(isa_dma, dma);
+        DMA_release_DREQ (dma);
         AUD_set_active_out (s->voice, 0);
     }
 }
@@ -260,8 +252,8 @@ static void dma_cmd8 (SB16State *s, int mask, int dma_len)
     s->align = (1 << s->fmt_stereo) - 1;
 
     if (s->block_size & s->align) {
-        qemu_log_mask(LOG_GUEST_ERROR, "warning: misaligned block size %d,"
-                      " alignment %d\n", s->block_size, s->align + 1);
+        dolog ("warning: misaligned block size %d, alignment %d\n",
+               s->block_size, s->align + 1);
     }
 
     ldebug ("freq %d, stereo %d, sign %d, bits %d, "
@@ -340,8 +332,8 @@ static void dma_cmd (SB16State *s, uint8_t cmd, uint8_t d0, int dma_len)
     s->highspeed = 0;
     s->align = (1 << (s->fmt_stereo + (s->fmt_bits == 16))) - 1;
     if (s->block_size & s->align) {
-        qemu_log_mask(LOG_GUEST_ERROR, "warning: misaligned block size %d,"
-                      " alignment %d\n", s->block_size, s->align + 1);
+        dolog ("warning: misaligned block size %d, alignment %d\n",
+               s->block_size, s->align + 1);
     }
 
     if (s->freq) {
@@ -393,8 +385,7 @@ static void command (SB16State *s, uint8_t cmd)
 
     if (cmd > 0xaf && cmd < 0xd0) {
         if (cmd & 8) {
-            qemu_log_mask(LOG_UNIMP, "ADC not yet supported (command %#x)\n",
-                          cmd);
+            dolog ("ADC not yet supported (command %#x)\n", cmd);
         }
 
         switch (cmd >> 4) {
@@ -402,7 +393,7 @@ static void command (SB16State *s, uint8_t cmd)
         case 12:
             break;
         default:
-            qemu_log_mask(LOG_GUEST_ERROR, "%#x wrong bits\n", cmd);
+            dolog ("%#x wrong bits\n", cmd);
         }
         s->needed_bytes = 3;
     }
@@ -456,7 +447,7 @@ static void command (SB16State *s, uint8_t cmd)
             goto warn;
 
         case 0x35:
-            qemu_log_mask(LOG_UNIMP, "0x35 - MIDI command not implemented\n");
+            dolog ("0x35 - MIDI command not implemented\n");
             break;
 
         case 0x40:
@@ -490,38 +481,34 @@ static void command (SB16State *s, uint8_t cmd)
 
         case 0x74:
             s->needed_bytes = 2; /* DMA DAC, 4-bit ADPCM */
-            qemu_log_mask(LOG_UNIMP, "0x75 - DMA DAC, 4-bit ADPCM not"
-                          " implemented\n");
+            dolog ("0x75 - DMA DAC, 4-bit ADPCM not implemented\n");
             break;
 
         case 0x75:              /* DMA DAC, 4-bit ADPCM Reference */
             s->needed_bytes = 2;
-            qemu_log_mask(LOG_UNIMP, "0x74 - DMA DAC, 4-bit ADPCM Reference not"
-                          " implemented\n");
+            dolog ("0x74 - DMA DAC, 4-bit ADPCM Reference not implemented\n");
             break;
 
         case 0x76:              /* DMA DAC, 2.6-bit ADPCM */
             s->needed_bytes = 2;
-            qemu_log_mask(LOG_UNIMP, "0x74 - DMA DAC, 2.6-bit ADPCM not"
-                          " implemented\n");
+            dolog ("0x74 - DMA DAC, 2.6-bit ADPCM not implemented\n");
             break;
 
         case 0x77:              /* DMA DAC, 2.6-bit ADPCM Reference */
             s->needed_bytes = 2;
-            qemu_log_mask(LOG_UNIMP, "0x74 - DMA DAC, 2.6-bit ADPCM Reference"
-                          " not implemented\n");
+            dolog ("0x74 - DMA DAC, 2.6-bit ADPCM Reference not implemented\n");
             break;
 
         case 0x7d:
-            qemu_log_mask(LOG_UNIMP, "0x7d - Autio-Initialize DMA DAC, 4-bit"
-                          " ADPCM Reference\n");
-            qemu_log_mask(LOG_UNIMP, "not implemented\n");
+            dolog ("0x7d - Autio-Initialize DMA DAC, 4-bit ADPCM Reference\n");
+            dolog ("not implemented\n");
             break;
 
         case 0x7f:
-            qemu_log_mask(LOG_UNIMP, "0x7d - Autio-Initialize DMA DAC, 2.6-bit"
-                          " ADPCM Reference\n");
-            qemu_log_mask(LOG_UNIMP, "not implemented\n");
+            dolog (
+                "0x7d - Autio-Initialize DMA DAC, 2.6-bit ADPCM Reference\n"
+                );
+            dolog ("not implemented\n");
             break;
 
         case 0x80:
@@ -593,7 +580,7 @@ static void command (SB16State *s, uint8_t cmd)
             break;
 
         case 0xe7:
-            qemu_log_mask(LOG_UNIMP, "Attempt to probe for ESS (0xe7)?\n");
+            dolog ("Attempt to probe for ESS (0xe7)?\n");
             break;
 
         case 0xe8:              /* read test reg */
@@ -620,7 +607,7 @@ static void command (SB16State *s, uint8_t cmd)
             goto warn;
 
         default:
-            qemu_log_mask(LOG_UNIMP, "Unrecognized command %#x\n", cmd);
+            dolog ("Unrecognized command %#x\n", cmd);
             break;
         }
     }
@@ -639,8 +626,8 @@ static void command (SB16State *s, uint8_t cmd)
     return;
 
  warn:
-    qemu_log_mask(LOG_UNIMP, "warning: command %#x,%d is not truly understood"
-                  " yet\n", cmd, s->needed_bytes);
+    dolog ("warning: command %#x,%d is not truly understood yet\n",
+           cmd, s->needed_bytes);
     goto exit;
 
 }
@@ -742,8 +729,9 @@ static void complete (SB16State *s)
             break;
 
         case 0x42:              /* FT2 sets output freq with this, go figure */
-            qemu_log_mask(LOG_UNIMP, "cmd 0x42 might not do what it think it"
-                          " should\n");
+#if 0
+            dolog ("cmd 0x42 might not do what it think it should\n");
+#endif
         case 0x41:
             s->freq = dsp_get_hilo (s);
             ldebug ("set freq %d\n", s->freq);
@@ -769,8 +757,8 @@ static void complete (SB16State *s)
                 freq = s->freq > 0 ? s->freq : 11025;
                 samples = dsp_get_lohi (s) + 1;
                 bytes = samples << s->fmt_stereo << (s->fmt_bits == 16);
-                ticks = muldiv64(bytes, NANOSECONDS_PER_SECOND, freq);
-                if (ticks < NANOSECONDS_PER_SECOND / 1024) {
+                ticks = muldiv64 (bytes, get_ticks_per_sec (), freq);
+                if (ticks < get_ticks_per_sec () / 1024) {
                     qemu_irq_raise (s->pic);
                 }
                 else {
@@ -826,8 +814,7 @@ static void complete (SB16State *s)
             break;
 
         default:
-            qemu_log_mask(LOG_UNIMP, "complete: unrecognized command %#x\n",
-                          s->cmd);
+            dolog ("complete: unrecognized command %#x\n", s->cmd);
             return;
         }
     }
@@ -1102,9 +1089,10 @@ static void mixer_write_datab(void *opaque, uint32_t nport, uint32_t val)
             dma = ctz32 (val & 0xf);
             hdma = ctz32 (val & 0xf0);
             if (dma != s->dma || hdma != s->hdma) {
-                qemu_log_mask(LOG_GUEST_ERROR, "attempt to change DMA 8bit"
-                              " %d(%d), 16bit %d(%d) (val=%#x)\n", dma, s->dma,
-                              hdma, s->hdma, val);
+                dolog (
+                    "attempt to change DMA "
+                    "8bit %d(%d), 16bit %d(%d) (val=%#x)\n",
+                    dma, s->dma, hdma, s->hdma, val);
             }
 #if 0
             s->dma = dma;
@@ -1114,8 +1102,8 @@ static void mixer_write_datab(void *opaque, uint32_t nport, uint32_t val)
         break;
 
     case 0x82:
-        qemu_log_mask(LOG_GUEST_ERROR, "attempt to write into IRQ status"
-                      " register (val=%#x)\n", val);
+        dolog ("attempt to write into IRQ status register (val=%#x)\n",
+               val);
         return;
 
     default:
@@ -1148,8 +1136,6 @@ static uint32_t mixer_read(void *opaque, uint32_t nport)
 static int write_audio (SB16State *s, int nchan, int dma_pos,
                         int dma_len, int len)
 {
-    IsaDma *isa_dma = nchan == s->dma ? s->isa_dma : s->isa_hdma;
-    IsaDmaClass *k = ISADMA_GET_CLASS(isa_dma);
     int temp, net;
     uint8_t tmpbuf[4096];
 
@@ -1166,7 +1152,7 @@ static int write_audio (SB16State *s, int nchan, int dma_pos,
             to_copy = sizeof (tmpbuf);
         }
 
-        copied = k->read_memory(isa_dma, nchan, tmpbuf, dma_pos, to_copy);
+        copied = DMA_read_memory (nchan, tmpbuf, dma_pos, to_copy);
         copied = AUD_write (s->voice, tmpbuf, copied);
 
         temp -= copied;
@@ -1187,9 +1173,8 @@ static int SB_read_DMA (void *opaque, int nchan, int dma_pos, int dma_len)
     int till, copy, written, free;
 
     if (s->block_size <= 0) {
-        qemu_log_mask(LOG_GUEST_ERROR, "invalid block size=%d nchan=%d"
-                      " dma_pos=%d dma_len=%d\n", s->block_size, nchan,
-                      dma_pos, dma_len);
+        dolog ("invalid block size=%d nchan=%d dma_pos=%d dma_len=%d\n",
+               s->block_size, nchan, dma_pos, dma_len);
         return dma_pos;
     }
 
@@ -1369,14 +1354,6 @@ static void sb16_realizefn (DeviceState *dev, Error **errp)
 {
     ISADevice *isadev = ISA_DEVICE (dev);
     SB16State *s = SB16 (dev);
-    IsaDmaClass *k;
-
-    s->isa_hdma = isa_get_dma(isa_bus_from_device(isadev), s->hdma);
-    s->isa_dma = isa_get_dma(isa_bus_from_device(isadev), s->dma);
-    if (!s->isa_dma || !s->isa_hdma) {
-        error_setg(errp, "ISA controller does not support DMA");
-        return;
-    }
 
     isa_init_irq (isadev, &s->pic, s->irq);
 
@@ -1390,18 +1367,13 @@ static void sb16_realizefn (DeviceState *dev, Error **errp)
     reset_mixer (s);
     s->aux_ts = timer_new_ns(QEMU_CLOCK_VIRTUAL, aux_timer, s);
     if (!s->aux_ts) {
-        error_setg(errp, "warning: Could not create auxiliary timer");
+        dolog ("warning: Could not create auxiliary timer\n");
     }
 
-    isa_register_portio_list(isadev, &s->portio_list, s->port,
-                             sb16_ioport_list, s, "sb16");
+    isa_register_portio_list (isadev, s->port, sb16_ioport_list, s, "sb16");
 
-    k = ISADMA_GET_CLASS(s->isa_hdma);
-    k->register_channel(s->isa_hdma, s->hdma, SB_read_DMA, s);
-
-    k = ISADMA_GET_CLASS(s->isa_dma);
-    k->register_channel(s->isa_dma, s->dma, SB_read_DMA, s);
-
+    DMA_register_channel (s->hdma, SB_read_DMA, s);
+    DMA_register_channel (s->dma, SB_read_DMA, s);
     s->can_write = 1;
 
     AUD_register_card ("sb16", &s->card);

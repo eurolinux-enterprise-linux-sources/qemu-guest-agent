@@ -25,6 +25,7 @@ seq=`basename $0`
 echo "QA output created by $seq"
 
 here=`pwd`
+tmp=/tmp/$$
 status=1	# failure is the default!
 
 trap "exit \$status" 0 1 2 3 15

@@ -35,7 +35,6 @@
 #define NO_QEMU_PROTOS
 #include "arch/common/fw_cfg.h"
 #include "arch/ppc/processor.h"
-#include "context.h"
 
 #define UUID_FMT "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
 
@@ -106,11 +105,8 @@ static const pci_arch_t known_arch[] = {
         .mem_len = 0x10000000,
         .io_base = 0x80000000,
         .io_len = 0x00010000,
-        .host_ranges = {
-            { .type = IO_SPACE, .parentaddr = 0, .childaddr = 0x80000000, .len = 0x00010000 },
-            { .type = MEMORY_SPACE_32, .parentaddr = 0, .childaddr = 0xc0100000, .len = 0x10000000 },
-            { .type = 0, .parentaddr = 0, .childaddr = 0, .len = 0 }
-         },
+        .rbase = 0x00000000,
+        .rlen = 0x00400000,
         .irqs = { 9, 11, 9, 11 }
     },
     [ARCH_MAC99] = {
@@ -126,11 +122,8 @@ static const pci_arch_t known_arch[] = {
         .mem_len = 0x10000000,
         .io_base = 0xf2000000,
         .io_len = 0x00800000,
-        .host_ranges = {
-            { .type = IO_SPACE, .parentaddr = 0, .childaddr = 0xf2000000, .len = 0x00800000 },
-            { .type = MEMORY_SPACE_32, .parentaddr = 0x80000000, .childaddr = 0x80000000, .len = 0x10000000 },
-            { .type = 0, .parentaddr = 0, .childaddr = 0, .len = 0 }
-         },
+        .rbase = 0x00000000,
+        .rlen = 0x01000000,
         .irqs = { 0x1b, 0x1c, 0x1d, 0x1e }
     },
     [ARCH_MAC99_U3] = {
@@ -146,11 +139,8 @@ static const pci_arch_t known_arch[] = {
         .mem_len = 0x10000000,
         .io_base = 0xf2000000,
         .io_len = 0x00800000,
-        .host_ranges = {
-            { .type = IO_SPACE, .parentaddr = 0, .childaddr = 0xf2000000, .len = 0x00800000 },
-            { .type = MEMORY_SPACE_32, .parentaddr = 0x80000000, .childaddr = 0x80000000, .len = 0x10000000 },
-            { .type = 0, .parentaddr = 0, .childaddr = 0, .len = 0 }
-         },
+        .rbase = 0x00000000,
+        .rlen = 0x01000000,
         .irqs = { 0x1b, 0x1c, 0x1d, 0x1e }
     },
     [ARCH_HEATHROW] = {
@@ -166,12 +156,8 @@ static const pci_arch_t known_arch[] = {
         .mem_len = 0x10000000,
         .io_base = 0xfe000000,
         .io_len = 0x00800000,
-        .host_ranges = {
-            { .type = IO_SPACE, .parentaddr = 0, .childaddr = 0xfe000000, .len = 0x00800000 },
-            { .type = MEMORY_SPACE_32, .parentaddr = 0, .childaddr = 0xfd000000, .len = 0x01000000 },
-            { .type = MEMORY_SPACE_32, .parentaddr = 0x80000000, .childaddr = 0x80000000, .len = 0x10000000 },
-            { .type = 0, .parentaddr = 0, .childaddr = 0, .len = 0 }
-         },
+        .rbase = 0xfd000000,
+        .rlen = 0x01000000,
         .irqs = { 21, 22, 23, 24 }
     },
 };
@@ -608,15 +594,17 @@ id_cpu(void)
     }
 }
 
-static void arch_go(void);
+static void go(void);
 
 static void
-arch_go(void)
+go(void)
 {
-    /* Insert copyright property for MacOS 9 and below */
-    if (find_dev("/rom/macos")) {
-        fword("insert-copyright-property");
-    }
+    ucell addr;
+
+    feval("saved-program-state >sps.entry @");
+    addr = POP();
+
+    call_elf(0, 0, addr);
 }
 
 static void kvm_of_init(void)
@@ -932,11 +920,11 @@ arch_of_init(void)
     if (fw_cfg_read_i16(FW_CFG_NOGRAPHIC)) {
         if (is_apple()) {
             if (CONFIG_SERIAL_PORT) {
-                stdin_path = "sccb";
-                stdout_path = "sccb";
-            } else {
                 stdin_path = "scca";
                 stdout_path = "scca";
+            } else {
+                stdin_path = "sccb";
+                stdout_path = "sccb";
             }
         } else {
             stdin_path = "ttya";
@@ -1021,5 +1009,5 @@ arch_of_init(void)
     bind_func("(adler32)", adler32);
     
     bind_func("platform-boot", boot);
-    bind_func("(arch-go)", arch_go);
+    bind_func("(go)", go);
 }

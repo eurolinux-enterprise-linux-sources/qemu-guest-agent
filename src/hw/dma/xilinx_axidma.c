@@ -22,9 +22,7 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "qapi/error.h"
 #include "qemu/timer.h"
 #include "hw/ptimer.h"
 #include "qemu/log.h"
@@ -111,7 +109,6 @@ struct Stream {
     unsigned int complete_cnt;
     uint32_t regs[R_MAX];
     uint8_t app[20];
-    unsigned char txbuf[16 * 1024];
 };
 
 struct XilinxAXIDMAStreamSlave {
@@ -179,6 +176,16 @@ static inline int streamid_from_addr(hwaddr addr)
     sid &= 1;
     return sid;
 }
+
+#ifdef DEBUG_ENET
+static void stream_desc_show(struct SDesc *d)
+{
+    qemu_log("buffer_addr  = " PRIx64 "\n", d->buffer_address);
+    qemu_log("nxtdesc      = " PRIx64 "\n", d->nxtdesc);
+    qemu_log("control      = %x\n", d->control);
+    qemu_log("status       = %x\n", d->status);
+}
+#endif
 
 static void stream_desc_load(struct Stream *s, hwaddr addr)
 {
@@ -257,6 +264,7 @@ static void stream_process_mem2s(struct Stream *s, StreamSlave *tx_data_dev,
                                  StreamSlave *tx_control_dev)
 {
     uint32_t prev_d;
+    unsigned char txbuf[16 * 1024];
     unsigned int txlen;
 
     if (!stream_running(s) || stream_idle(s)) {
@@ -277,17 +285,17 @@ static void stream_process_mem2s(struct Stream *s, StreamSlave *tx_data_dev,
         }
 
         txlen = s->desc.control & SDESC_CTRL_LEN_MASK;
-        if ((txlen + s->pos) > sizeof s->txbuf) {
+        if ((txlen + s->pos) > sizeof txbuf) {
             hw_error("%s: too small internal txbuf! %d\n", __func__,
                      txlen + s->pos);
         }
 
         cpu_physical_memory_read(s->desc.buffer_address,
-                                 s->txbuf + s->pos, txlen);
+                                 txbuf + s->pos, txlen);
         s->pos += txlen;
 
         if (stream_desc_eof(&s->desc)) {
-            stream_push(tx_data_dev, s->txbuf, s->pos);
+            stream_push(tx_data_dev, txbuf, s->pos);
             s->pos = 0;
             stream_complete(s);
         }
@@ -548,19 +556,33 @@ static void xilinx_axidma_realize(DeviceState *dev, Error **errp)
 
         st->nr = i;
         st->bh = qemu_bh_new(timer_hit, st);
-        st->ptimer = ptimer_init(st->bh, PTIMER_POLICY_DEFAULT);
+        st->ptimer = ptimer_init(st->bh);
         ptimer_set_freq(st->ptimer, s->freqhz);
     }
     return;
 
 xilinx_axidma_realize_fail:
-    error_propagate(errp, local_err);
+    if (!*errp) {
+        *errp = local_err;
+    }
 }
 
 static void xilinx_axidma_init(Object *obj)
 {
     XilinxAXIDMA *s = XILINX_AXI_DMA(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+
+    object_property_add_link(obj, "axistream-connected", TYPE_STREAM_SLAVE,
+                             (Object **)&s->tx_data_dev,
+                             qdev_prop_allow_set_link_before_realize,
+                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             &error_abort);
+    object_property_add_link(obj, "axistream-control-connected",
+                             TYPE_STREAM_SLAVE,
+                             (Object **)&s->tx_control_dev,
+                             qdev_prop_allow_set_link_before_realize,
+                             OBJ_PROP_LINK_UNREF_ON_RELEASE,
+                             &error_abort);
 
     object_initialize(&s->rx_data_dev, sizeof(s->rx_data_dev),
                       TYPE_XILINX_AXI_DMA_DATA_STREAM);
@@ -581,10 +603,6 @@ static void xilinx_axidma_init(Object *obj)
 
 static Property axidma_properties[] = {
     DEFINE_PROP_UINT32("freqhz", XilinxAXIDMA, freqhz, 50000000),
-    DEFINE_PROP_LINK("axistream-connected", XilinxAXIDMA,
-                     tx_data_dev, TYPE_STREAM_SLAVE, StreamSlave *),
-    DEFINE_PROP_LINK("axistream-control-connected", XilinxAXIDMA,
-                     tx_control_dev, TYPE_STREAM_SLAVE, StreamSlave *),
     DEFINE_PROP_END_OF_LIST(),
 };
 

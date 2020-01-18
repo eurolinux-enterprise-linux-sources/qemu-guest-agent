@@ -20,7 +20,8 @@ FALSE VALUE initialized?
 
 2000 CONSTANT VIRTFS-BUF-SIZE \ 8k
 
-virtio-setup-vd VALUE virtiodev
+/vd-len BUFFER: virtiodev
+virtiodev virtio-setup-vd
 
 \
 \ Support methods.

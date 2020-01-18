@@ -14,9 +14,8 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-
-#ifndef HW_USB_HCD_EHCI_H
-#define HW_USB_HCD_EHCI_H
+#ifndef HW_USB_EHCI_H
+#define HW_USB_EHCI_H 1
 
 #include "hw/hw.h"
 #include "qemu/timer.h"
@@ -297,7 +296,6 @@ struct EHCIState {
      */
     QEMUTimer *frame_timer;
     QEMUBH *async_bh;
-    bool working;
     uint32_t astate;         /* Current state in asynchronous schedule */
     uint32_t pstate;         /* Current state in periodic schedule     */
     USBPort ports[NB_PORTS];
@@ -324,7 +322,6 @@ struct EHCIState {
 extern const VMStateDescription vmstate_ehci;
 
 void usb_ehci_init(EHCIState *s, DeviceState *dev);
-void usb_ehci_finalize(EHCIState *s);
 void usb_ehci_realize(EHCIState *s, DeviceState *dev, Error **errp);
 void usb_ehci_unrealize(EHCIState *s, DeviceState *dev, Error **errp);
 void ehci_reset(void *opaque);
@@ -344,7 +341,6 @@ typedef struct EHCIPCIState {
 #define TYPE_SYS_BUS_EHCI "sysbus-ehci-usb"
 #define TYPE_EXYNOS4210_EHCI "exynos4210-ehci-usb"
 #define TYPE_TEGRA2_EHCI "tegra2-ehci-usb"
-#define TYPE_PPC4xx_EHCI "ppc4xx-ehci-usb"
 #define TYPE_FUSBH200_EHCI "fusbh200-ehci-usb"
 
 #define SYS_BUS_EHCI(obj) \

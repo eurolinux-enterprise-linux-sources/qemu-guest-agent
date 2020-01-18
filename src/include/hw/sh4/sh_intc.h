@@ -1,5 +1,5 @@
-#ifndef SH_INTC_H
-#define SH_INTC_H
+#ifndef __SH_INTC_H__
+#define __SH_INTC_H__
 
 #include "qemu-common.h"
 #include "hw/irq.h"
@@ -80,4 +80,4 @@ int sh_intc_init(MemoryRegion *sysmem,
 
 void sh_intc_set_irl(void *opaque, int n, int level);
 
-#endif /* SH_INTC_H */
+#endif /* __SH_INTC_H__ */

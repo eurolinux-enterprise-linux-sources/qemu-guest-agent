@@ -1,4 +1,3 @@
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/queue.h"
 #include "qemu/envlist.h"
@@ -17,14 +16,16 @@ static int envlist_parse(envlist_t *envlist,
     const char *env, int (*)(envlist_t *, const char *));
 
 /*
- * Allocates new envlist and returns pointer to it.
+ * Allocates new envlist and returns pointer to that or
+ * NULL in case of error.
  */
 envlist_t *
 envlist_create(void)
 {
 	envlist_t *envlist;
 
-	envlist = g_malloc(sizeof(*envlist));
+	if ((envlist = malloc(sizeof (*envlist))) == NULL)
+		return (NULL);
 
 	QLIST_INIT(&envlist->el_entries);
 	envlist->el_count = 0;
@@ -46,10 +47,10 @@ envlist_free(envlist_t *envlist)
 		entry = envlist->el_entries.lh_first;
 		QLIST_REMOVE(entry, ev_link);
 
-		g_free((char *)entry->ev_var);
-		g_free(entry);
+		free((char *)entry->ev_var);
+		free(entry);
 	}
-	g_free(envlist);
+	free(envlist);
 }
 
 /*
@@ -99,7 +100,8 @@ envlist_parse(envlist_t *envlist, const char *env,
 	if ((envlist == NULL) || (env == NULL))
 		return (EINVAL);
 
-	tmpenv = g_strdup(env);
+	if ((tmpenv = strdup(env)) == NULL)
+		return (errno);
     envsave = tmpenv;
 
     do {
@@ -114,7 +116,7 @@ envlist_parse(envlist_t *envlist, const char *env,
         tmpenv = envvar + 1;
     } while (envvar != NULL);
 
-    g_free(envsave);
+    free(envsave);
     return ret;
 }
 
@@ -152,14 +154,18 @@ envlist_setenv(envlist_t *envlist, const char *env)
 
 	if (entry != NULL) {
 		QLIST_REMOVE(entry, ev_link);
-		g_free((char *)entry->ev_var);
-		g_free(entry);
+		free((char *)entry->ev_var);
+		free(entry);
 	} else {
 		envlist->el_count++;
 	}
 
-	entry = g_malloc(sizeof(*entry));
-	entry->ev_var = g_strdup(env);
+	if ((entry = malloc(sizeof (*entry))) == NULL)
+		return (errno);
+	if ((entry->ev_var = strdup(env)) == NULL) {
+		free(entry);
+		return (errno);
+	}
 	QLIST_INSERT_HEAD(&envlist->el_entries, entry, ev_link);
 
 	return (0);
@@ -194,8 +200,8 @@ envlist_unsetenv(envlist_t *envlist, const char *env)
 	}
 	if (entry != NULL) {
 		QLIST_REMOVE(entry, ev_link);
-		g_free((char *)entry->ev_var);
-		g_free(entry);
+		free((char *)entry->ev_var);
+		free(entry);
 
 		envlist->el_count--;
 	}
@@ -205,12 +211,12 @@ envlist_unsetenv(envlist_t *envlist, const char *env)
 /*
  * Returns given envlist as array of strings (in same form that
  * global variable environ is).  Caller must free returned memory
- * by calling g_free for each element and the array.
- * Returned array and given envlist are not related (no common
- * references).
+ * by calling free(3) for each element and for the array.  Returned
+ * array and given envlist are not related (no common references).
  *
  * If caller provides count pointer, number of items in array is
- * stored there.
+ * stored there.  In case of error, NULL is returned and no memory
+ * is allocated.
  */
 char **
 envlist_to_environ(const envlist_t *envlist, size_t *count)
@@ -218,11 +224,13 @@ envlist_to_environ(const envlist_t *envlist, size_t *count)
 	struct envlist_entry *entry;
 	char **env, **penv;
 
-	penv = env = g_malloc((envlist->el_count + 1) * sizeof(char *));
+	penv = env = malloc((envlist->el_count + 1) * sizeof (char *));
+	if (env == NULL)
+		return (NULL);
 
 	for (entry = envlist->el_entries.lh_first; entry != NULL;
 	    entry = entry->ev_link.le_next) {
-		*(penv++) = g_strdup(entry->ev_var);
+		*(penv++) = strdup(entry->ev_var);
 	}
 	*penv = NULL; /* NULL terminate the list */
 

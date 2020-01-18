@@ -22,8 +22,11 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
+#include <stdint.h>
+#include <string.h>
+#include <stdio.h>
 
+#include <glib.h>
 
 #include "libqtest.h"
 #include "qemu-common.h"
@@ -264,7 +267,7 @@ static void test_cmos(void)
     uint8_t cmos;
 
     cmos = cmos_read(CMOS_FLOPPY);
-    g_assert(cmos == 0x40 || cmos == 0x50);
+    g_assert(cmos == 0x40);
 }
 
 static void test_no_media_on_start(void)
@@ -298,9 +301,10 @@ static void test_media_insert(void)
 
     /* Insert media in drive. DSKCHK should not be reset until a step pulse
      * is sent. */
-    qmp_discard_response("{'execute':'blockdev-change-medium', 'arguments':{"
-                         " 'id':'floppy0', 'filename': %s, 'format': 'raw' }}",
+    qmp_discard_response("{'execute':'change', 'arguments':{"
+                         " 'device':'floppy0', 'target': %s, 'arg': 'raw' }}",
                          test_image);
+    qmp_discard_response(""); /* ignore event (open -> close) */
 
     dir = inb(FLOPPY_BASE + reg_dir);
     assert_bit_set(dir, DSKCHG);
@@ -330,7 +334,8 @@ static void test_media_change(void)
     /* Eject the floppy and check that DSKCHG is set. Reading it out doesn't
      * reset the bit. */
     qmp_discard_response("{'execute':'eject', 'arguments':{"
-                         " 'id':'floppy0' }}");
+                         " 'device':'floppy0' }}");
+    qmp_discard_response(""); /* ignore event */
 
     dir = inb(FLOPPY_BASE + reg_dir);
     assert_bit_set(dir, DSKCHG);
@@ -564,7 +569,7 @@ int main(int argc, char **argv)
     /* Run the tests */
     g_test_init(&argc, &argv, NULL);
 
-    qtest_start("-device floppy,id=floppy0");
+    qtest_start(NULL);
     qtest_irq_intercept_in(global_qtest, "ioapic");
     qtest_add_func("/fdc/cmos", test_cmos);
     qtest_add_func("/fdc/no_media_on_start", test_no_media_on_start);

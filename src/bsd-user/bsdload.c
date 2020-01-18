@@ -1,6 +1,12 @@
 /* Code for loading BSD executables.  Mostly linux kernel code.  */
 
-#include "qemu/osdep.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "qemu.h"
 
@@ -20,6 +26,22 @@ abi_long memcpy_to_target(abi_ulong dest, const void *src,
     return 0;
 }
 
+static int in_group_p(gid_t g)
+{
+    /* return TRUE if we're in the specified group, FALSE otherwise */
+    int         ngroup;
+    int         i;
+    gid_t       grouplist[TARGET_NGROUPS];
+
+    ngroup = getgroups(TARGET_NGROUPS, grouplist);
+    for(i = 0; i < ngroup; i++) {
+        if(grouplist[i] == g) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int count(char ** vec)
 {
     int         i;
@@ -35,7 +57,7 @@ static int prepare_binprm(struct linux_binprm *bprm)
 {
     struct stat         st;
     int mode;
-    int retval;
+    int retval, id_change;
 
     if(fstat(bprm->fd, &st) < 0) {
         return(-errno);
@@ -51,10 +73,14 @@ static int prepare_binprm(struct linux_binprm *bprm)
 
     bprm->e_uid = geteuid();
     bprm->e_gid = getegid();
+    id_change = 0;
 
     /* Set-uid? */
     if(mode & S_ISUID) {
         bprm->e_uid = st.st_uid;
+        if(bprm->e_uid != geteuid()) {
+            id_change = 1;
+        }
     }
 
     /* Set-gid? */
@@ -65,6 +91,9 @@ static int prepare_binprm(struct linux_binprm *bprm)
      */
     if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP)) {
         bprm->e_gid = st.st_gid;
+        if (!in_group_p(bprm->e_gid)) {
+                id_change = 1;
+        }
     }
 
     memset(bprm->buf, 0, sizeof(bprm->buf));

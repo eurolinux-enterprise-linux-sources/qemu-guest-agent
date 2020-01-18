@@ -12,14 +12,11 @@
  *
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "monitor/monitor.h"
 #include "net/net.h"
 #include "clients.h"
 #include "hub.h"
 #include "qemu/iov.h"
-#include "qemu/error-report.h"
 
 /*
  * A hub broadcasts incoming packets to all its ports except the source port.
@@ -133,7 +130,7 @@ static void net_hub_port_cleanup(NetClientState *nc)
 }
 
 static NetClientInfo net_hub_port_info = {
-    .type = NET_CLIENT_DRIVER_HUBPORT,
+    .type = NET_CLIENT_OPTIONS_KIND_HUBPORT,
     .size = sizeof(NetHubPort),
     .can_receive = net_hub_port_can_receive,
     .receive = net_hub_port_receive,
@@ -141,8 +138,7 @@ static NetClientInfo net_hub_port_info = {
     .cleanup = net_hub_port_cleanup,
 };
 
-static NetHubPort *net_hub_port_new(NetHub *hub, const char *name,
-                                    NetClientState *hubpeer)
+static NetHubPort *net_hub_port_new(NetHub *hub, const char *name)
 {
     NetClientState *nc;
     NetHubPort *port;
@@ -155,7 +151,7 @@ static NetHubPort *net_hub_port_new(NetHub *hub, const char *name,
         name = default_name;
     }
 
-    nc = qemu_new_net_client(&net_hub_port_info, hubpeer, "hub", name);
+    nc = qemu_new_net_client(&net_hub_port_info, NULL, "hub", name);
     port = DO_UPCAST(NetHubPort, nc, nc);
     port->id = id;
     port->hub = hub;
@@ -167,14 +163,11 @@ static NetHubPort *net_hub_port_new(NetHub *hub, const char *name,
 
 /**
  * Create a port on a given hub
- * @hub_id: Number of the hub
  * @name: Net client name or NULL for default name.
- * @hubpeer: Peer to use (if "netdev=id" has been specified)
  *
  * If there is no existing hub with the given id then a new hub is created.
  */
-NetClientState *net_hub_add_port(int hub_id, const char *name,
-                                 NetClientState *hubpeer)
+NetClientState *net_hub_add_port(int hub_id, const char *name)
 {
     NetHub *hub;
     NetHubPort *port;
@@ -189,7 +182,7 @@ NetClientState *net_hub_add_port(int hub_id, const char *name,
         hub = net_hub_new(hub_id);
     }
 
-    port = net_hub_port_new(hub, name, hubpeer);
+    port = net_hub_port_new(hub, name);
     return &port->nc;
 }
 
@@ -237,7 +230,7 @@ NetClientState *net_hub_port_find(int hub_id)
         }
     }
 
-    nc = net_hub_add_port(hub_id, NULL, NULL);
+    nc = net_hub_add_port(hub_id, NULL);
     return nc;
 }
 
@@ -272,10 +265,10 @@ int net_hub_id_for_client(NetClientState *nc, int *id)
 {
     NetHubPort *port;
 
-    if (nc->info->type == NET_CLIENT_DRIVER_HUBPORT) {
+    if (nc->info->type == NET_CLIENT_OPTIONS_KIND_HUBPORT) {
         port = DO_UPCAST(NetHubPort, nc, nc);
     } else if (nc->peer != NULL && nc->peer->info->type ==
-            NET_CLIENT_DRIVER_HUBPORT) {
+            NET_CLIENT_OPTIONS_KIND_HUBPORT) {
         port = DO_UPCAST(NetHubPort, nc, nc->peer);
     } else {
         return -ENOENT;
@@ -287,26 +280,16 @@ int net_hub_id_for_client(NetClientState *nc, int *id)
     return 0;
 }
 
-int net_init_hubport(const Netdev *netdev, const char *name,
+int net_init_hubport(const NetClientOptions *opts, const char *name,
                      NetClientState *peer, Error **errp)
 {
     const NetdevHubPortOptions *hubport;
-    NetClientState *hubpeer = NULL;
 
-    assert(netdev->type == NET_CLIENT_DRIVER_HUBPORT);
+    assert(opts->type == NET_CLIENT_OPTIONS_KIND_HUBPORT);
     assert(!peer);
-    hubport = &netdev->u.hubport;
+    hubport = opts->u.hubport;
 
-    if (hubport->has_netdev) {
-        hubpeer = qemu_find_netdev(hubport->netdev);
-        if (!hubpeer) {
-            error_setg(errp, "netdev '%s' not found", hubport->netdev);
-            return -1;
-        }
-    }
-
-    net_hub_add_port(hubport->hubid, name, hubpeer);
-
+    net_hub_add_port(hubport->hubid, name);
     return 0;
 }
 
@@ -325,19 +308,20 @@ void net_hub_check_clients(void)
         QLIST_FOREACH(port, &hub->ports, next) {
             peer = port->nc.peer;
             if (!peer) {
-                warn_report("hub port %s has no peer", port->nc.name);
+                fprintf(stderr, "Warning: hub port %s has no peer\n",
+                        port->nc.name);
                 continue;
             }
 
             switch (peer->info->type) {
-            case NET_CLIENT_DRIVER_NIC:
+            case NET_CLIENT_OPTIONS_KIND_NIC:
                 has_nic = 1;
                 break;
-            case NET_CLIENT_DRIVER_USER:
-            case NET_CLIENT_DRIVER_TAP:
-            case NET_CLIENT_DRIVER_SOCKET:
-            case NET_CLIENT_DRIVER_VDE:
-            case NET_CLIENT_DRIVER_VHOST_USER:
+            case NET_CLIENT_OPTIONS_KIND_USER:
+            case NET_CLIENT_OPTIONS_KIND_TAP:
+            case NET_CLIENT_OPTIONS_KIND_SOCKET:
+            case NET_CLIENT_OPTIONS_KIND_VDE:
+            case NET_CLIENT_OPTIONS_KIND_VHOST_USER:
                 has_host_dev = 1;
                 break;
             default:
@@ -345,10 +329,12 @@ void net_hub_check_clients(void)
             }
         }
         if (has_host_dev && !has_nic) {
-            warn_report("vlan %d with no nics", hub->id);
+            fprintf(stderr, "Warning: vlan %d with no nics\n", hub->id);
         }
         if (has_nic && !has_host_dev) {
-            warn_report("vlan %d is not connected to host network", hub->id);
+            fprintf(stderr,
+                    "Warning: vlan %d is not connected to host network\n",
+                    hub->id);
         }
     }
 }

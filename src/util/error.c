@@ -12,9 +12,8 @@
  * the COPYING.LIB file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu-common.h"
+#include "qapi/error.h"
 #include "qemu/error-report.h"
 
 struct Error
@@ -45,8 +44,7 @@ static void error_handle_fatal(Error **errp, Error *err)
 
 static void error_setv(Error **errp,
                        const char *src, int line, const char *func,
-                       ErrorClass err_class, const char *fmt, va_list ap,
-                       const char *suffix)
+                       ErrorClass err_class, const char *fmt, va_list ap)
 {
     Error *err;
     int saved_errno = errno;
@@ -58,11 +56,6 @@ static void error_setv(Error **errp,
 
     err = g_malloc0(sizeof(*err));
     err->msg = g_strdup_vprintf(fmt, ap);
-    if (suffix) {
-        char *msg = err->msg;
-        err->msg = g_strdup_printf("%s: %s", msg, suffix);
-        g_free(msg);
-    }
     err->err_class = err_class;
     err->src = src;
     err->line = line;
@@ -81,7 +74,7 @@ void error_set_internal(Error **errp,
     va_list ap;
 
     va_start(ap, fmt);
-    error_setv(errp, src, line, func, err_class, fmt, ap, NULL);
+    error_setv(errp, src, line, func, err_class, fmt, ap);
     va_end(ap);
 }
 
@@ -92,7 +85,7 @@ void error_setg_internal(Error **errp,
     va_list ap;
 
     va_start(ap, fmt);
-    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap, NULL);
+    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap);
     va_end(ap);
 }
 
@@ -101,6 +94,7 @@ void error_setg_errno_internal(Error **errp,
                                int os_errno, const char *fmt, ...)
 {
     va_list ap;
+    char *msg;
     int saved_errno = errno;
 
     if (errp == NULL) {
@@ -108,9 +102,14 @@ void error_setg_errno_internal(Error **errp,
     }
 
     va_start(ap, fmt);
-    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap,
-               os_errno != 0 ? strerror(os_errno) : NULL);
+    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap);
     va_end(ap);
+
+    if (os_errno != 0) {
+        msg = (*errp)->msg;
+        (*errp)->msg = g_strdup_printf("%s: %s", msg, strerror(os_errno));
+        g_free(msg);
+    }
 
     errno = saved_errno;
 }
@@ -123,30 +122,6 @@ void error_setg_file_open_internal(Error **errp,
                               "Could not open '%s'", filename);
 }
 
-void error_vprepend(Error **errp, const char *fmt, va_list ap)
-{
-    GString *newmsg;
-
-    if (!errp) {
-        return;
-    }
-
-    newmsg = g_string_new(NULL);
-    g_string_vprintf(newmsg, fmt, ap);
-    g_string_append(newmsg, (*errp)->msg);
-    g_free((*errp)->msg);
-    (*errp)->msg = g_string_free(newmsg, 0);
-}
-
-void error_prepend(Error **errp, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    error_vprepend(errp, fmt, ap);
-    va_end(ap);
-}
-
 void error_append_hint(Error **errp, const char *fmt, ...)
 {
     va_list ap;
@@ -157,7 +132,7 @@ void error_append_hint(Error **errp, const char *fmt, ...)
         return;
     }
     err = *errp;
-    assert(err && errp != &error_abort && errp != &error_fatal);
+    assert(err && errp != &error_abort);
 
     if (!err->hint) {
         err->hint = g_string_new(NULL);
@@ -176,22 +151,24 @@ void error_setg_win32_internal(Error **errp,
                                int win32_err, const char *fmt, ...)
 {
     va_list ap;
-    char *suffix = NULL;
+    char *msg1, *msg2;
 
     if (errp == NULL) {
         return;
     }
 
-    if (win32_err != 0) {
-        suffix = g_win32_error_message(win32_err);
-    }
-
     va_start(ap, fmt);
-    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR,
-               fmt, ap, suffix);
+    error_setv(errp, src, line, func, ERROR_CLASS_GENERIC_ERROR, fmt, ap);
     va_end(ap);
 
-    g_free(suffix);
+    if (win32_err != 0) {
+        msg1 = (*errp)->msg;
+        msg2 = g_win32_error_message(win32_err);
+        (*errp)->msg = g_strdup_printf("%s: %s (error: %x)", msg1, msg2,
+                                       (unsigned)win32_err);
+        g_free(msg2);
+        g_free(msg1);
+    }
 }
 
 #endif
@@ -218,7 +195,7 @@ ErrorClass error_get_class(const Error *err)
     return err->err_class;
 }
 
-const char *error_get_pretty(const Error *err)
+const char *error_get_pretty(Error *err)
 {
     return err->msg;
 }
@@ -227,39 +204,9 @@ void error_report_err(Error *err)
 {
     error_report("%s", error_get_pretty(err));
     if (err->hint) {
-        error_printf_unless_qmp("%s", err->hint->str);
+        error_printf_unless_qmp("%s\n", err->hint->str);
     }
     error_free(err);
-}
-
-void warn_report_err(Error *err)
-{
-    warn_report("%s", error_get_pretty(err));
-    if (err->hint) {
-        error_printf_unless_qmp("%s", err->hint->str);
-    }
-    error_free(err);
-}
-
-void error_reportf_err(Error *err, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    error_vprepend(&err, fmt, ap);
-    va_end(ap);
-    error_report_err(err);
-}
-
-
-void warn_reportf_err(Error *err, const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    error_vprepend(&err, fmt, ap);
-    va_end(ap);
-    warn_report_err(err);
 }
 
 void error_free(Error *err)

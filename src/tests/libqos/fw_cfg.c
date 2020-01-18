@@ -12,7 +12,7 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
 #include "libqos/fw_cfg.h"
 #include "libqtest.h"
 #include "qemu/bswap.h"
@@ -56,7 +56,7 @@ uint64_t qfw_cfg_get_u64(QFWCFG *fw_cfg, uint16_t key)
 
 static void mm_fw_cfg_select(QFWCFG *fw_cfg, uint16_t key)
 {
-    qtest_writew(fw_cfg->qts, fw_cfg->base, key);
+    writew(fw_cfg->base, key);
 }
 
 static void mm_fw_cfg_read(QFWCFG *fw_cfg, void *data, size_t len)
@@ -65,16 +65,15 @@ static void mm_fw_cfg_read(QFWCFG *fw_cfg, void *data, size_t len)
     int i;
 
     for (i = 0; i < len; i++) {
-        ptr[i] = qtest_readb(fw_cfg->qts, fw_cfg->base + 2);
+        ptr[i] = readb(fw_cfg->base + 2);
     }
 }
 
-QFWCFG *mm_fw_cfg_init(QTestState *qts, uint64_t base)
+QFWCFG *mm_fw_cfg_init(uint64_t base)
 {
     QFWCFG *fw_cfg = g_malloc0(sizeof(*fw_cfg));
 
     fw_cfg->base = base;
-    fw_cfg->qts = qts;
     fw_cfg->select = mm_fw_cfg_select;
     fw_cfg->read = mm_fw_cfg_read;
 
@@ -83,7 +82,7 @@ QFWCFG *mm_fw_cfg_init(QTestState *qts, uint64_t base)
 
 static void io_fw_cfg_select(QFWCFG *fw_cfg, uint16_t key)
 {
-    qtest_outw(fw_cfg->qts, fw_cfg->base, key);
+    outw(fw_cfg->base, key);
 }
 
 static void io_fw_cfg_read(QFWCFG *fw_cfg, void *data, size_t len)
@@ -92,16 +91,15 @@ static void io_fw_cfg_read(QFWCFG *fw_cfg, void *data, size_t len)
     int i;
 
     for (i = 0; i < len; i++) {
-        ptr[i] = qtest_inb(fw_cfg->qts, fw_cfg->base + 1);
+        ptr[i] = inb(fw_cfg->base + 1);
     }
 }
 
-QFWCFG *io_fw_cfg_init(QTestState *qts, uint16_t base)
+QFWCFG *io_fw_cfg_init(uint16_t base)
 {
     QFWCFG *fw_cfg = g_malloc0(sizeof(*fw_cfg));
 
     fw_cfg->base = base;
-    fw_cfg->qts = qts;
     fw_cfg->select = io_fw_cfg_select;
     fw_cfg->read = io_fw_cfg_read;
 

@@ -6,12 +6,10 @@
  *
  * This code is licensed under the GNU GPL v2.
  */
-
 #ifndef PXA_H
-#define PXA_H
+# define PXA_H			"pxa.h"
 
 #include "exec/memory.h"
-#include "target/arm/cpu-qom.h"
 
 /* Interrupt numbers */
 # define PXA2XX_PIC_SSP3	0
@@ -83,6 +81,7 @@ typedef struct PXA2xxLCDState PXA2xxLCDState;
 PXA2xxLCDState *pxa2xx_lcdc_init(MemoryRegion *sysmem,
                 hwaddr base, qemu_irq irq);
 void pxa2xx_lcd_vsync_notifier(PXA2xxLCDState *s, qemu_irq handler);
+void pxa2xx_lcdc_oritentation(void *opaque, int angle);
 
 /* pxa2xx_mmci.c */
 typedef struct PXA2xxMMCIState PXA2xxMMCIState;
@@ -189,4 +188,4 @@ PXA2xxState *pxa270_init(MemoryRegion *address_space, unsigned int sdram_size,
                          const char *revision);
 PXA2xxState *pxa255_init(MemoryRegion *address_space, unsigned int sdram_size);
 
-#endif /* PXA_H */
+#endif	/* PXA_H */

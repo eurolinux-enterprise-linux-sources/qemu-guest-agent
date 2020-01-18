@@ -6,10 +6,7 @@
  *
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu-common.h"
-#include "qemu/cutils.h"
 #include "xen-host-pci-device.h"
 
 #define XEN_HOST_PCI_MAX_EXT_CAP \
@@ -34,20 +31,25 @@
 #define IORESOURCE_PREFETCH     0x00001000      /* No side effects */
 #define IORESOURCE_MEM_64       0x00100000
 
-static void xen_host_pci_sysfs_path(const XenHostPCIDevice *d,
-                                    const char *name, char *buf, ssize_t size)
+static int xen_host_pci_sysfs_path(const XenHostPCIDevice *d,
+                                   const char *name, char *buf, ssize_t size)
 {
     int rc;
 
     rc = snprintf(buf, size, "/sys/bus/pci/devices/%04x:%02x:%02x.%d/%s",
                   d->domain, d->bus, d->dev, d->func, name);
-    assert(rc >= 0 && rc < size);
+
+    if (rc >= size || rc < 0) {
+        /* The output is truncated, or some other error was encountered */
+        return -ENODEV;
+    }
+    return 0;
 }
 
 
 /* This size should be enough to read the first 7 lines of a resource file */
 #define XEN_HOST_PCI_RESOURCE_BUFFER_SIZE 400
-static void xen_host_pci_get_resource(XenHostPCIDevice *d, Error **errp)
+static int xen_host_pci_get_resource(XenHostPCIDevice *d)
 {
     int i, rc, fd;
     char path[PATH_MAX];
@@ -56,22 +58,25 @@ static void xen_host_pci_get_resource(XenHostPCIDevice *d, Error **errp)
     char *endptr, *s;
     uint8_t type;
 
-    xen_host_pci_sysfs_path(d, "resource", path, sizeof(path));
-
+    rc = xen_host_pci_sysfs_path(d, "resource", path, sizeof (path));
+    if (rc) {
+        return rc;
+    }
     fd = open(path, O_RDONLY);
     if (fd == -1) {
-        error_setg_file_open(errp, errno, path);
-        return;
+        XEN_HOST_PCI_LOG("Error: Can't open %s: %s\n", path, strerror(errno));
+        return -errno;
     }
 
     do {
-        rc = read(fd, &buf, sizeof(buf) - 1);
+        rc = read(fd, &buf, sizeof (buf) - 1);
         if (rc < 0 && errno != EINTR) {
-            error_setg_errno(errp, errno, "read err");
+            rc = -errno;
             goto out;
         }
     } while (rc < 0);
     buf[rc] = 0;
+    rc = 0;
 
     s = buf;
     for (i = 0; i < PCI_NUM_REGIONS; i++) {
@@ -124,69 +129,70 @@ static void xen_host_pci_get_resource(XenHostPCIDevice *d, Error **errp)
             d->rom.bus_flags = flags & IORESOURCE_BITS;
         }
     }
-
     if (i != PCI_NUM_REGIONS) {
-        error_setg(errp, "Invalid format or input too short: %s", buf);
+        /* Invalid format or input to short */
+        rc = -ENODEV;
     }
 
 out:
     close(fd);
+    return rc;
 }
 
 /* This size should be enough to read a long from a file */
 #define XEN_HOST_PCI_GET_VALUE_BUFFER_SIZE 22
-static void xen_host_pci_get_value(XenHostPCIDevice *d, const char *name,
-                                   unsigned int *pvalue, int base, Error **errp)
+static int xen_host_pci_get_value(XenHostPCIDevice *d, const char *name,
+                                  unsigned int *pvalue, int base)
 {
     char path[PATH_MAX];
     char buf[XEN_HOST_PCI_GET_VALUE_BUFFER_SIZE];
     int fd, rc;
     unsigned long value;
-    const char *endptr;
+    char *endptr;
 
-    xen_host_pci_sysfs_path(d, name, path, sizeof(path));
-
+    rc = xen_host_pci_sysfs_path(d, name, path, sizeof (path));
+    if (rc) {
+        return rc;
+    }
     fd = open(path, O_RDONLY);
     if (fd == -1) {
-        error_setg_file_open(errp, errno, path);
-        return;
+        XEN_HOST_PCI_LOG("Error: Can't open %s: %s\n", path, strerror(errno));
+        return -errno;
     }
-
     do {
-        rc = read(fd, &buf, sizeof(buf) - 1);
+        rc = read(fd, &buf, sizeof (buf) - 1);
         if (rc < 0 && errno != EINTR) {
-            error_setg_errno(errp, errno, "read err");
+            rc = -errno;
             goto out;
         }
     } while (rc < 0);
-
     buf[rc] = 0;
-    rc = qemu_strtoul(buf, &endptr, base, &value);
-    if (!rc) {
-        assert(value <= UINT_MAX);
-        *pvalue = value;
+    value = strtol(buf, &endptr, base);
+    if (endptr == buf || *endptr != '\n') {
+        rc = -1;
+    } else if ((value == LONG_MIN || value == LONG_MAX) && errno == ERANGE) {
+        rc = -errno;
     } else {
-        error_setg_errno(errp, -rc, "failed to parse value '%s'", buf);
+        rc = 0;
+        *pvalue = value;
     }
-
 out:
     close(fd);
+    return rc;
 }
 
-static inline void xen_host_pci_get_hex_value(XenHostPCIDevice *d,
-                                              const char *name,
-                                              unsigned int *pvalue,
-                                              Error **errp)
+static inline int xen_host_pci_get_hex_value(XenHostPCIDevice *d,
+                                             const char *name,
+                                             unsigned int *pvalue)
 {
-    xen_host_pci_get_value(d, name, pvalue, 16, errp);
+    return xen_host_pci_get_value(d, name, pvalue, 16);
 }
 
-static inline void xen_host_pci_get_dec_value(XenHostPCIDevice *d,
-                                              const char *name,
-                                              unsigned int *pvalue,
-                                              Error **errp)
+static inline int xen_host_pci_get_dec_value(XenHostPCIDevice *d,
+                                             const char *name,
+                                             unsigned int *pvalue)
 {
-    xen_host_pci_get_value(d, name, pvalue, 10, errp);
+    return xen_host_pci_get_value(d, name, pvalue, 10);
 }
 
 static bool xen_host_pci_dev_is_virtfn(XenHostPCIDevice *d)
@@ -194,21 +200,26 @@ static bool xen_host_pci_dev_is_virtfn(XenHostPCIDevice *d)
     char path[PATH_MAX];
     struct stat buf;
 
-    xen_host_pci_sysfs_path(d, "physfn", path, sizeof(path));
-
+    if (xen_host_pci_sysfs_path(d, "physfn", path, sizeof (path))) {
+        return false;
+    }
     return !stat(path, &buf);
 }
 
-static void xen_host_pci_config_open(XenHostPCIDevice *d, Error **errp)
+static int xen_host_pci_config_open(XenHostPCIDevice *d)
 {
     char path[PATH_MAX];
+    int rc;
 
-    xen_host_pci_sysfs_path(d, "config", path, sizeof(path));
-
-    d->config_fd = open(path, O_RDWR);
-    if (d->config_fd == -1) {
-        error_setg_file_open(errp, errno, path);
+    rc = xen_host_pci_sysfs_path(d, "config", path, sizeof (path));
+    if (rc) {
+        return rc;
     }
+    d->config_fd = open(path, O_RDWR);
+    if (d->config_fd < 0) {
+        return -errno;
+    }
+    return 0;
 }
 
 static int xen_host_pci_config_read(XenHostPCIDevice *d,
@@ -330,12 +341,11 @@ int xen_host_pci_find_ext_cap_offset(XenHostPCIDevice *d, uint32_t cap)
     return -1;
 }
 
-void xen_host_pci_device_get(XenHostPCIDevice *d, uint16_t domain,
-                             uint8_t bus, uint8_t dev, uint8_t func,
-                             Error **errp)
+int xen_host_pci_device_get(XenHostPCIDevice *d, uint16_t domain,
+                            uint8_t bus, uint8_t dev, uint8_t func)
 {
     unsigned int v;
-    Error *err = NULL;
+    int rc = 0;
 
     d->config_fd = -1;
     d->domain = domain;
@@ -343,51 +353,43 @@ void xen_host_pci_device_get(XenHostPCIDevice *d, uint16_t domain,
     d->dev = dev;
     d->func = func;
 
-    xen_host_pci_config_open(d, &err);
-    if (err) {
+    rc = xen_host_pci_config_open(d);
+    if (rc) {
         goto error;
     }
-
-    xen_host_pci_get_resource(d, &err);
-    if (err) {
+    rc = xen_host_pci_get_resource(d);
+    if (rc) {
         goto error;
     }
-
-    xen_host_pci_get_hex_value(d, "vendor", &v, &err);
-    if (err) {
+    rc = xen_host_pci_get_hex_value(d, "vendor", &v);
+    if (rc) {
         goto error;
     }
     d->vendor_id = v;
-
-    xen_host_pci_get_hex_value(d, "device", &v, &err);
-    if (err) {
+    rc = xen_host_pci_get_hex_value(d, "device", &v);
+    if (rc) {
         goto error;
     }
     d->device_id = v;
-
-    xen_host_pci_get_dec_value(d, "irq", &v, &err);
-    if (err) {
+    rc = xen_host_pci_get_dec_value(d, "irq", &v);
+    if (rc) {
         goto error;
     }
     d->irq = v;
-
-    xen_host_pci_get_hex_value(d, "class", &v, &err);
-    if (err) {
+    rc = xen_host_pci_get_hex_value(d, "class", &v);
+    if (rc) {
         goto error;
     }
     d->class_code = v;
-
     d->is_virtfn = xen_host_pci_dev_is_virtfn(d);
 
-    return;
-
+    return 0;
 error:
-    error_propagate(errp, err);
-
     if (d->config_fd >= 0) {
         close(d->config_fd);
         d->config_fd = -1;
     }
+    return rc;
 }
 
 bool xen_host_pci_device_closed(XenHostPCIDevice *d)

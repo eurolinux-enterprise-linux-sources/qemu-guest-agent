@@ -23,7 +23,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 #include "hw/scsi/esp.h"
 #include "trace.h"
@@ -81,7 +80,7 @@ void esp_request_cancelled(SCSIRequest *req)
     }
 }
 
-static uint32_t get_cmd(ESPState *s, uint8_t *buf, uint8_t buflen)
+static uint32_t get_cmd(ESPState *s, uint8_t *buf)
 {
     uint32_t dmalen;
     int target;
@@ -91,15 +90,9 @@ static uint32_t get_cmd(ESPState *s, uint8_t *buf, uint8_t buflen)
         dmalen = s->rregs[ESP_TCLO];
         dmalen |= s->rregs[ESP_TCMID] << 8;
         dmalen |= s->rregs[ESP_TCHI] << 16;
-        if (dmalen > buflen) {
-            return 0;
-        }
         s->dma_memory_read(s->dma_opaque, buf, dmalen);
     } else {
         dmalen = s->ti_size;
-        if (dmalen > TI_BUFSZ) {
-            return 0;
-        }
         memcpy(buf, s->ti_buf, dmalen);
         buf[0] = buf[2] >> 5;
     }
@@ -171,7 +164,7 @@ static void handle_satn(ESPState *s)
         s->dma_cb = handle_satn;
         return;
     }
-    len = get_cmd(s, buf, sizeof(buf));
+    len = get_cmd(s, buf);
     if (len)
         do_cmd(s, buf);
 }
@@ -185,7 +178,7 @@ static void handle_s_without_atn(ESPState *s)
         s->dma_cb = handle_s_without_atn;
         return;
     }
-    len = get_cmd(s, buf, sizeof(buf));
+    len = get_cmd(s, buf);
     if (len) {
         do_busid_cmd(s, buf, 0);
     }
@@ -197,7 +190,7 @@ static void handle_satn_stop(ESPState *s)
         s->dma_cb = handle_satn_stop;
         return;
     }
-    s->cmdlen = get_cmd(s, s->cmdbuf, sizeof(s->cmdbuf));
+    s->cmdlen = get_cmd(s, s->cmdbuf);
     if (s->cmdlen) {
         trace_esp_handle_satn_stop(s->cmdlen);
         s->do_cmd = 1;
@@ -221,7 +214,7 @@ static void write_response(ESPState *s)
     } else {
         s->ti_size = 2;
         s->ti_rptr = 0;
-        s->ti_wptr = 2;
+        s->ti_wptr = 0;
         s->rregs[ESP_RFLAGS] = 2;
     }
     esp_raise_irq(s);
@@ -244,12 +237,15 @@ static void esp_do_dma(ESPState *s)
     uint32_t len;
     int to_device;
 
+    to_device = (s->ti_size < 0);
     len = s->dma_left;
     if (s->do_cmd) {
         trace_esp_do_dma(s->cmdlen, len);
-        assert (s->cmdlen <= sizeof(s->cmdbuf) &&
-                len <= sizeof(s->cmdbuf) - s->cmdlen);
         s->dma_memory_read(s->dma_opaque, &s->cmdbuf[s->cmdlen], len);
+        s->ti_size = 0;
+        s->cmdlen = 0;
+        s->do_cmd = 0;
+        do_cmd(s, s->cmdbuf);
         return;
     }
     if (s->async_len == 0) {
@@ -259,7 +255,6 @@ static void esp_do_dma(ESPState *s)
     if (len > s->async_len) {
         len = s->async_len;
     }
-    to_device = (s->ti_size < 0);
     if (to_device) {
         s->dma_memory_read(s->dma_opaque, s->async_buf, len);
     } else {
@@ -315,7 +310,6 @@ void esp_transfer_data(SCSIRequest *req, uint32_t len)
 {
     ESPState *s = req->hba_private;
 
-    assert(!s->do_cmd);
     trace_esp_transfer_data(s->dma_left, s->ti_size);
     s->async_len = len;
     s->async_buf = scsi_req_get_buf(req);
@@ -346,7 +340,7 @@ static void handle_ti(ESPState *s)
     s->dma_counter = dmalen;
 
     if (s->do_cmd)
-        minlen = (dmalen < ESP_CMDBUF_SZ) ? dmalen : ESP_CMDBUF_SZ;
+        minlen = (dmalen < 32) ? dmalen : 32;
     else if (s->ti_size < 0)
         minlen = (dmalen < -s->ti_size) ? dmalen : -s->ti_size;
     else
@@ -356,13 +350,13 @@ static void handle_ti(ESPState *s)
         s->dma_left = minlen;
         s->rregs[ESP_RSTAT] &= ~STAT_TC;
         esp_do_dma(s);
-    }
-    if (s->do_cmd) {
+    } else if (s->do_cmd) {
         trace_esp_handle_ti_cmd(s->cmdlen);
         s->ti_size = 0;
         s->cmdlen = 0;
         s->do_cmd = 0;
         do_cmd(s, s->cmdbuf);
+        return;
     }
 }
 
@@ -401,15 +395,19 @@ uint64_t esp_reg_read(ESPState *s, uint32_t saddr)
     trace_esp_mem_readb(saddr, s->rregs[saddr]);
     switch (saddr) {
     case ESP_FIFO:
-        if ((s->rregs[ESP_RSTAT] & STAT_PIO_MASK) == 0) {
-            /* Data out.  */
-            qemu_log_mask(LOG_UNIMP, "esp: PIO data read not implemented\n");
-            s->rregs[ESP_FIFO] = 0;
-        } else if (s->ti_rptr < s->ti_wptr) {
+        if (s->ti_size > 0) {
             s->ti_size--;
-            s->rregs[ESP_FIFO] = s->ti_buf[s->ti_rptr++];
+            if ((s->rregs[ESP_RSTAT] & STAT_PIO_MASK) == 0) {
+                /* Data out.  */
+                qemu_log_mask(LOG_UNIMP,
+                              "esp: PIO data read not implemented\n");
+                s->rregs[ESP_FIFO] = 0;
+            } else {
+                s->rregs[ESP_FIFO] = s->ti_buf[s->ti_rptr++];
+            }
+            esp_raise_irq(s);
         }
-        if (s->ti_rptr == s->ti_wptr) {
+        if (s->ti_size == 0) {
             s->ti_rptr = 0;
             s->ti_wptr = 0;
         }
@@ -448,12 +446,8 @@ void esp_reg_write(ESPState *s, uint32_t saddr, uint64_t val)
         break;
     case ESP_FIFO:
         if (s->do_cmd) {
-            if (s->cmdlen < ESP_CMDBUF_SZ) {
-                s->cmdbuf[s->cmdlen++] = val & 0xff;
-            } else {
-                trace_esp_error_fifo_overrun();
-            }
-        } else if (s->ti_wptr == TI_BUFSZ - 1) {
+            s->cmdbuf[s->cmdlen++] = val & 0xff;
+        } else if (s->ti_size == TI_BUFSZ - 1) {
             trace_esp_error_fifo_overrun();
         } else {
             s->ti_size++;
@@ -571,7 +565,7 @@ static bool esp_mem_accepts(void *opaque, hwaddr addr,
 
 const VMStateDescription vmstate_esp = {
     .name ="esp",
-    .version_id = 4,
+    .version_id = 3,
     .minimum_version_id = 3,
     .fields = (VMStateField[]) {
         VMSTATE_BUFFER(rregs, ESPState),
@@ -582,14 +576,26 @@ const VMStateDescription vmstate_esp = {
         VMSTATE_BUFFER(ti_buf, ESPState),
         VMSTATE_UINT32(status, ESPState),
         VMSTATE_UINT32(dma, ESPState),
-        VMSTATE_PARTIAL_BUFFER(cmdbuf, ESPState, 16),
-        VMSTATE_BUFFER_START_MIDDLE_V(cmdbuf, ESPState, 16, 4),
+        VMSTATE_BUFFER(cmdbuf, ESPState),
         VMSTATE_UINT32(cmdlen, ESPState),
         VMSTATE_UINT32(do_cmd, ESPState),
         VMSTATE_UINT32(dma_left, ESPState),
         VMSTATE_END_OF_LIST()
     }
 };
+
+#define TYPE_ESP "esp"
+#define ESP(obj) OBJECT_CHECK(SysBusESPState, (obj), TYPE_ESP)
+
+typedef struct {
+    /*< private >*/
+    SysBusDevice parent_obj;
+    /*< public >*/
+
+    MemoryRegion iomem;
+    uint32_t it_shift;
+    ESPState esp;
+} SysBusESPState;
 
 static void sysbus_esp_mem_write(void *opaque, hwaddr addr,
                                  uint64_t val, unsigned int size)
@@ -618,11 +624,11 @@ static const MemoryRegionOps sysbus_esp_mem_ops = {
     .valid.accepts = esp_mem_accepts,
 };
 
-ESPState *esp_init(hwaddr espaddr, int it_shift,
-                   ESPDMAMemoryReadWriteFunc dma_memory_read,
-                   ESPDMAMemoryReadWriteFunc dma_memory_write,
-                   void *dma_opaque, qemu_irq irq, qemu_irq *reset,
-                   qemu_irq *dma_enable)
+void esp_init(hwaddr espaddr, int it_shift,
+              ESPDMAMemoryReadWriteFunc dma_memory_read,
+              ESPDMAMemoryReadWriteFunc dma_memory_write,
+              void *dma_opaque, qemu_irq irq, qemu_irq *reset,
+              qemu_irq *dma_enable)
 {
     DeviceState *dev;
     SysBusDevice *s;
@@ -630,7 +636,7 @@ ESPState *esp_init(hwaddr espaddr, int it_shift,
     ESPState *esp;
 
     dev = qdev_create(NULL, TYPE_ESP);
-    sysbus = ESP_STATE(dev);
+    sysbus = ESP(dev);
     esp = &sysbus->esp;
     esp->dma_memory_read = dma_memory_read;
     esp->dma_memory_write = dma_memory_write;
@@ -644,8 +650,6 @@ ESPState *esp_init(hwaddr espaddr, int it_shift,
     sysbus_mmio_map(s, 0, espaddr);
     *reset = qdev_get_gpio_in(dev, 0);
     *dma_enable = qdev_get_gpio_in(dev, 1);
-
-    return esp;
 }
 
 static const struct SCSIBusInfo esp_scsi_info = {
@@ -660,7 +664,7 @@ static const struct SCSIBusInfo esp_scsi_info = {
 
 static void sysbus_esp_gpio_demux(void *opaque, int irq, int level)
 {
-    SysBusESPState *sysbus = ESP_STATE(opaque);
+    SysBusESPState *sysbus = ESP(opaque);
     ESPState *s = &sysbus->esp;
 
     switch (irq) {
@@ -676,8 +680,9 @@ static void sysbus_esp_gpio_demux(void *opaque, int irq, int level)
 static void sysbus_esp_realize(DeviceState *dev, Error **errp)
 {
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
-    SysBusESPState *sysbus = ESP_STATE(dev);
+    SysBusESPState *sysbus = ESP(dev);
     ESPState *s = &sysbus->esp;
+    Error *err = NULL;
 
     sysbus_init_irq(sbd, &s->irq);
     assert(sysbus->it_shift != -1);
@@ -690,11 +695,16 @@ static void sysbus_esp_realize(DeviceState *dev, Error **errp)
     qdev_init_gpio_in(dev, sysbus_esp_gpio_demux, 2);
 
     scsi_bus_new(&s->bus, sizeof(s->bus), dev, &esp_scsi_info, NULL);
+    scsi_bus_legacy_handle_cmdline(&s->bus, &err);
+    if (err != NULL) {
+        error_propagate(errp, err);
+        return;
+    }
 }
 
 static void sysbus_esp_hard_reset(DeviceState *dev)
 {
-    SysBusESPState *sysbus = ESP_STATE(dev);
+    SysBusESPState *sysbus = ESP(dev);
     esp_hard_reset(&sysbus->esp);
 }
 

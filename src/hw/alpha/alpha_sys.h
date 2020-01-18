@@ -1,9 +1,8 @@
 /* Alpha cores and system support chips.  */
 
-#ifndef HW_ALPHA_SYS_H
-#define HW_ALPHA_SYS_H
+#ifndef HW_ALPHA_H
+#define HW_ALPHA_H 1
 
-#include "target/alpha/cpu-qom.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_host.h"
 #include "hw/ide.h"

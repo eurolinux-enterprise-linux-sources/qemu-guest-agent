@@ -32,10 +32,6 @@
   >in.device-node @
 ;
 
-: instance-to-package ( ihandle -- phandle )
-  dup if ihandle>non-interposed-phandle then
-;
-
 : ihandle>phandle ( ihandle -- phandle )
   >in.device-node @
 ;

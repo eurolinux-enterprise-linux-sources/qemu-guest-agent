@@ -37,8 +37,8 @@
  * north bridge address to pci address.
  */
 
-#include "qemu/osdep.h"
-#include "qemu/error-report.h"
+#include <assert.h>
+
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "hw/i386/pc.h"
@@ -50,7 +50,7 @@
 //#define DEBUG_BONITO
 
 #ifdef DEBUG_BONITO
-#define DPRINTF(fmt, ...) fprintf(stderr, "%s: " fmt, __func__, ##__VA_ARGS__)
+#define DPRINTF(fmt, ...) fprintf(stderr, "%s: " fmt, __FUNCTION__, ##__VA_ARGS__)
 #else
 #define DPRINTF(fmt, ...)
 #endif
@@ -180,6 +180,8 @@
 #define PCI_ADDR(busno,devno,funno,regno)  \
     ((((busno)<<16)&0xff0000) + (((devno)<<11)&0xf800) + (((funno)<<8)&0x700) + (regno))
 
+#define TYPE_BONITO_PCI_HOST_BRIDGE "Bonito-pcihost"
+
 typedef struct BonitoState BonitoState;
 
 typedef struct PCIBonitoState
@@ -213,19 +215,16 @@ typedef struct PCIBonitoState
 
 } PCIBonitoState;
 
-struct BonitoState {
-    PCIHostState parent_obj;
-    qemu_irq *pic;
-    PCIBonitoState *pci_dev;
-};
-
-#define TYPE_BONITO_PCI_HOST_BRIDGE "Bonito-pcihost"
 #define BONITO_PCI_HOST_BRIDGE(obj) \
     OBJECT_CHECK(BonitoState, (obj), TYPE_BONITO_PCI_HOST_BRIDGE)
 
-#define TYPE_PCI_BONITO "Bonito"
-#define PCI_BONITO(obj) \
-    OBJECT_CHECK(PCIBonitoState, (obj), TYPE_PCI_BONITO)
+struct BonitoState {
+    PCIHostState parent_obj;
+
+    qemu_irq *pic;
+
+    PCIBonitoState *pci_dev;
+};
 
 static void bonito_writel(void *opaque, hwaddr addr,
                           uint64_t val, unsigned size)
@@ -269,7 +268,7 @@ static void bonito_writel(void *opaque, hwaddr addr,
         }
         s->regs[saddr] = val;
         if (reset) {
-            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            qemu_system_reset_request();
         }
         break;
     case BONITO_INTENSET:
@@ -449,8 +448,8 @@ static uint32_t bonito_sbridge_pciaddr(void *opaque, hwaddr addr)
     regno = (cfgaddr & BONITO_PCICONF_REG_MASK) >> BONITO_PCICONF_REG_OFFSET;
 
     if (idsel == 0) {
-        error_report("error in bonito pci config address " TARGET_FMT_plx
-                     ",pcimap_cfg=%x", addr, s->regs[BONITO_PCIMAP_CFG]);
+        fprintf(stderr, "error in bonito pci config address " TARGET_FMT_plx
+            ",pcimap_cfg=%x\n", addr, s->regs[BONITO_PCIMAP_CFG]);
         exit(1);
     }
     pciaddr = PCI_ADDR(pci_bus_num(phb->bus), devno, funno, regno);
@@ -714,17 +713,17 @@ static int bonito_pcihost_initfn(SysBusDevice *dev)
 {
     PCIHostState *phb = PCI_HOST_BRIDGE(dev);
 
-    phb->bus = pci_register_root_bus(DEVICE(dev), "pci",
-                                     pci_bonito_set_irq, pci_bonito_map_irq,
-                                     dev, get_system_memory(), get_system_io(),
-                                     0x28, 32, TYPE_PCI_BUS);
+    phb->bus = pci_register_bus(DEVICE(dev), "pci",
+                                pci_bonito_set_irq, pci_bonito_map_irq, dev,
+                                get_system_memory(), get_system_io(),
+                                0x28, 32, TYPE_PCI_BUS);
 
     return 0;
 }
 
 static void bonito_realize(PCIDevice *dev, Error **errp)
 {
-    PCIBonitoState *s = PCI_BONITO(dev);
+    PCIBonitoState *s = DO_UPCAST(PCIBonitoState, dev, dev);
     SysBusDevice *sysbus = SYS_BUS_DEVICE(s->pcihost);
     PCIHostState *phb = PCI_HOST_BRIDGE(s->pcihost);
 
@@ -800,8 +799,8 @@ PCIBus *bonito_init(qemu_irq *pic)
     qdev_init_nofail(dev);
 
     /* set the pcihost pointer before bonito_initfn is called */
-    d = pci_create(phb->bus, PCI_DEVFN(0, 0), TYPE_PCI_BONITO);
-    s = PCI_BONITO(d);
+    d = pci_create(phb->bus, PCI_DEVFN(0, 0), "Bonito");
+    s = DO_UPCAST(PCIBonitoState, dev, d);
     s->pcihost = pcihost;
     pcihost->pci_dev = s;
     qdev_init_nofail(DEVICE(d));
@@ -825,18 +824,14 @@ static void bonito_class_init(ObjectClass *klass, void *data)
      * PCI-facing part of the host bridge, not usable without the
      * host-facing part, which can't be device_add'ed, yet.
      */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo bonito_info = {
-    .name          = TYPE_PCI_BONITO,
+    .name          = "Bonito",
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIBonitoState),
     .class_init    = bonito_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void bonito_pcihost_class_init(ObjectClass *klass, void *data)

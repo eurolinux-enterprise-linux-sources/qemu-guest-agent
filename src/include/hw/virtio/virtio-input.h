@@ -1,5 +1,5 @@
-#ifndef QEMU_VIRTIO_INPUT_H
-#define QEMU_VIRTIO_INPUT_H
+#ifndef _QEMU_VIRTIO_INPUT_H
+#define _QEMU_VIRTIO_INPUT_H
 
 #include "ui/input.h"
 
@@ -12,6 +12,20 @@
 typedef struct virtio_input_absinfo virtio_input_absinfo;
 typedef struct virtio_input_config virtio_input_config;
 typedef struct virtio_input_event virtio_input_event;
+
+#if defined(HOST_WORDS_BIGENDIAN)
+# define const_le32(_x)                          \
+    (((_x & 0x000000ffU) << 24) |                \
+     ((_x & 0x0000ff00U) <<  8) |                \
+     ((_x & 0x00ff0000U) >>  8) |                \
+     ((_x & 0xff000000U) >> 24))
+# define const_le16(_x)                          \
+    (((_x & 0x00ff) << 8) |                      \
+     ((_x & 0xff00) >> 8))
+#else
+# define const_le32(_x) (_x)
+# define const_le16(_x) (_x)
+#endif
 
 /* ----------------------------------------------------------------- */
 /* qemu internals                                                    */
@@ -62,10 +76,7 @@ struct VirtIOInput {
     VirtQueue                         *evt, *sts;
     char                              *serial;
 
-    struct {
-        virtio_input_event event;
-        VirtQueueElement *elem;
-    }                                 *queue;
+    virtio_input_event                *queue;
     uint32_t                          qindex, qsize;
 
     bool                              active;
@@ -89,7 +100,6 @@ struct VirtIOInputHID {
     QemuInputHandler                  *handler;
     QemuInputHandlerState             *hs;
     int                               ledstate;
-    bool                              wheel_axis;
 };
 
 struct VirtIOInputHost {
@@ -101,12 +111,9 @@ struct VirtIOInputHost {
 void virtio_input_send(VirtIOInput *vinput, virtio_input_event *event);
 void virtio_input_init_config(VirtIOInput *vinput,
                               virtio_input_config *config);
-virtio_input_config *virtio_input_find_config(VirtIOInput *vinput,
-                                              uint8_t select,
-                                              uint8_t subsel);
 void virtio_input_add_config(VirtIOInput *vinput,
                              virtio_input_config *config);
 void virtio_input_idstr_config(VirtIOInput *vinput,
                                uint8_t select, const char *string);
 
-#endif /* QEMU_VIRTIO_INPUT_H */
+#endif /* _QEMU_VIRTIO_INPUT_H */

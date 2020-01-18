@@ -1,6 +1,8 @@
 #ifndef QEMU_MEMFD_H
 #define QEMU_MEMFD_H
 
+#include "config-host.h"
+#include <stdbool.h>
 
 #ifndef F_LINUX_SPECIFIC_BASE
 #define F_LINUX_SPECIFIC_BASE 1024
@@ -16,11 +18,8 @@
 #define F_SEAL_WRITE    0x0008  /* prevent writes */
 #endif
 
-int qemu_memfd_create(const char *name, size_t size, bool hugetlb,
-                      uint64_t hugetlbsize, unsigned int seals, Error **errp);
-bool qemu_memfd_alloc_check(void);
 void *qemu_memfd_alloc(const char *name, size_t size, unsigned int seals,
-                       int *fd, Error **errp);
+                       int *fd);
 void qemu_memfd_free(void *ptr, size_t size, int fd);
 bool qemu_memfd_check(void);
 

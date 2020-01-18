@@ -5,7 +5,6 @@
 #include "config.h"
 #include "libopenbios/bindings.h"
 #include "libopenbios/elf_load.h"
-#include "libopenbios/initprogram.h"
 #include "arch/common/nvram.h"
 #include "libc/diskio.h"
 
@@ -82,26 +81,4 @@ boot( void )
                 printk("successfully loaded client at %llx.\n", (unsigned long long)(ucell)entry);
 	else
 		printk("failed.\n");
-}
-
-unsigned int
-start_elf(void)
-{
-	return 0;
-}
-
-struct context * volatile __context;
-
-int
-arch_init_program(void)
-{
-	return 0;
-}
-
-void forth_fw_cfg_read_file(void);
-
-void
-forth_fw_cfg_read_file(void)
-{
-	return;
 }

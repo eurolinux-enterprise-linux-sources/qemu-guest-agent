@@ -18,10 +18,14 @@
     along with this program; if not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef FPA11_H
-#define FPA11_H
+#ifndef __FPA11_H__
+#define __FPA11_H__
 
-#include "cpu.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
+
+#include <cpu.h>
 
 #define GET_FPA11() (qemufpa)
 
@@ -104,7 +108,7 @@ static inline void writeRegister(unsigned int x, unsigned int y)
 
 static inline void writeConditionCodes(unsigned int x)
 {
-    cpsr_write(user_registers, x, CPSR_NZCV, CPSRWriteByInstr);
+        cpsr_write(user_registers,x,CPSR_NZCV);
 }
 
 #define ARM_REG_PC 15

@@ -142,36 +142,28 @@ static int memmap_settings_fetch ( struct settings *settings,
 	struct memory_map memmap;
 	struct memory_region *region;
 	uint64_t result = 0;
-	unsigned int start;
-	unsigned int count;
-	unsigned int scale;
-	int include_start;
-	int include_length;
-	int ignore_nonexistent;
 	unsigned int i;
+	unsigned int count;
 
-	/* Parse settings tag */
-	start = MEMMAP_START ( setting->tag );
-	count = MEMMAP_COUNT ( setting->tag );
-	scale = MEMMAP_SCALE ( setting->tag );
-	include_start = MEMMAP_INCLUDE_START ( setting->tag );
-	include_length = MEMMAP_INCLUDE_LENGTH ( setting->tag );
-	ignore_nonexistent = MEMMAP_IGNORE_NONEXISTENT ( setting->tag );
 	DBGC ( settings, "MEMMAP start %d count %d %s%s%s%s scale %d\n",
-	       start, count, ( include_start ? "start" : "" ),
-	       ( ( include_start && include_length ) ? "+" : "" ),
-	       ( include_length ? "length" : "" ),
-	       ( ignore_nonexistent ? " ignore" : "" ), scale );
+	       MEMMAP_START ( setting->tag ), MEMMAP_COUNT ( setting->tag ),
+	       ( MEMMAP_INCLUDE_START ( setting->tag ) ? "start" : "" ),
+	       ( ( MEMMAP_INCLUDE_START ( setting->tag ) &&
+		   MEMMAP_INCLUDE_LENGTH ( setting->tag ) ) ? "+" : "" ),
+	       ( MEMMAP_INCLUDE_LENGTH ( setting->tag ) ? "length" : "" ),
+	       ( MEMMAP_IGNORE_NONEXISTENT ( setting->tag ) ? " ignore" : "" ),
+	       MEMMAP_SCALE ( setting->tag ) );
 
 	/* Fetch memory map */
 	get_memmap ( &memmap );
 
 	/* Extract results from memory map */
-	for ( i = start ; count-- ; i++ ) {
+	count = MEMMAP_COUNT ( setting->tag );
+	for ( i = MEMMAP_START ( setting->tag ) ; count-- ; i++ ) {
 
 		/* Check that region exists */
 		if ( i >= memmap.count ) {
-			if ( ignore_nonexistent ) {
+			if ( MEMMAP_IGNORE_NONEXISTENT ( setting->tag ) ) {
 				continue;
 			} else {
 				DBGC ( settings, "MEMMAP region %d does not "
@@ -182,12 +174,12 @@ static int memmap_settings_fetch ( struct settings *settings,
 
 		/* Extract results from this region */
 		region = &memmap.regions[i];
-		if ( include_start ) {
+		if ( MEMMAP_INCLUDE_START ( setting->tag ) ) {
 			result += region->start;
 			DBGC ( settings, "MEMMAP %d start %08llx\n",
 			       i, region->start );
 		}
-		if ( include_length ) {
+		if ( MEMMAP_INCLUDE_LENGTH ( setting->tag ) ) {
 			result += ( region->end - region->start );
 			DBGC ( settings, "MEMMAP %d length %08llx\n",
 			       i, ( region->end - region->start ) );
@@ -195,7 +187,7 @@ static int memmap_settings_fetch ( struct settings *settings,
 	}
 
 	/* Scale result */
-	result >>= scale;
+	result >>= MEMMAP_SCALE ( setting->tag );
 
 	/* Return result */
 	result = cpu_to_be64 ( result );

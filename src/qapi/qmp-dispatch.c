@@ -11,15 +11,14 @@
  *
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
+#include "qapi/qmp/types.h"
 #include "qapi/qmp/dispatch.h"
 #include "qapi/qmp/json-parser.h"
-#include "qapi/qmp/qdict.h"
-#include "qapi/qmp/qjson.h"
-#include "qapi/qmp/qbool.h"
+#include "qapi-types.h"
+#include "qapi/error.h"
+#include "qapi/qmp/qerror.h"
 
-QDict *qmp_dispatch_check_obj(const QObject *request, Error **errp)
+static QDict *qmp_dispatch_check_obj(const QObject *request, Error **errp)
 {
     const QDictEntry *ent;
     const char *arg_name;
@@ -27,11 +26,13 @@ QDict *qmp_dispatch_check_obj(const QObject *request, Error **errp)
     bool has_exec_key = false;
     QDict *dict = NULL;
 
-    dict = qobject_to(QDict, request);
-    if (!dict) {
-        error_setg(errp, "QMP input must be a JSON object");
+    if (qobject_type(request) != QTYPE_QDICT) {
+        error_setg(errp, QERR_QMP_BAD_INPUT_OBJECT,
+                   "request is not a dictionary");
         return NULL;
     }
+
+    dict = qobject_to_qdict(request);
 
     for (ent = qdict_first(dict); ent;
          ent = qdict_next(dict, ent)) {
@@ -40,42 +41,26 @@ QDict *qmp_dispatch_check_obj(const QObject *request, Error **errp)
 
         if (!strcmp(arg_name, "execute")) {
             if (qobject_type(arg_obj) != QTYPE_QSTRING) {
-                error_setg(errp,
-                           "QMP input member 'execute' must be a string");
+                error_setg(errp, QERR_QMP_BAD_INPUT_OBJECT_MEMBER, "execute",
+                           "string");
                 return NULL;
             }
             has_exec_key = true;
-        } else if (!strcmp(arg_name, "arguments")) {
-            if (qobject_type(arg_obj) != QTYPE_QDICT) {
-                error_setg(errp,
-                           "QMP input member 'arguments' must be an object");
-                return NULL;
-            }
-        } else if (!strcmp(arg_name, "id")) {
-            continue;
-        } else if (!strcmp(arg_name, "control")) {
-            if (qobject_type(arg_obj) != QTYPE_QDICT) {
-                error_setg(errp,
-                           "QMP input member 'control' must be a dict");
-                return NULL;
-            }
-        } else {
-            error_setg(errp, "QMP input member '%s' is unexpected",
-                       arg_name);
+        } else if (strcmp(arg_name, "arguments")) {
+            error_setg(errp, QERR_QMP_EXTRA_MEMBER, arg_name);
             return NULL;
         }
     }
 
     if (!has_exec_key) {
-        error_setg(errp, "QMP input lacks member 'execute'");
+        error_setg(errp, QERR_QMP_BAD_INPUT_OBJECT, "execute");
         return NULL;
     }
 
     return dict;
 }
 
-static QObject *do_qmp_dispatch(QmpCommandList *cmds, QObject *request,
-                                Error **errp)
+static QObject *do_qmp_dispatch(QObject *request, Error **errp)
 {
     Error *local_err = NULL;
     const char *command;
@@ -89,7 +74,7 @@ static QObject *do_qmp_dispatch(QmpCommandList *cmds, QObject *request,
     }
 
     command = qdict_get_str(dict, "execute");
-    cmd = qmp_find_command(cmds, command);
+    cmd = qmp_find_command(command);
     if (cmd == NULL) {
         error_set(errp, ERROR_CLASS_COMMAND_NOT_FOUND,
                   "The command %s has not been found", command);
@@ -108,13 +93,17 @@ static QObject *do_qmp_dispatch(QmpCommandList *cmds, QObject *request,
         QINCREF(args);
     }
 
-    cmd->fn(args, &ret, &local_err);
-    if (local_err) {
-        error_propagate(errp, local_err);
-    } else if (cmd->options & QCO_NO_SUCCESS_RESP) {
-        g_assert(!ret);
-    } else if (!ret) {
-        ret = QOBJECT(qdict_new());
+    switch (cmd->type) {
+    case QCT_NORMAL:
+        cmd->fn(args, &ret, &local_err);
+        if (local_err) {
+            error_propagate(errp, local_err);
+        } else if (cmd->options & QCO_NO_SUCCESS_RESP) {
+            g_assert(!ret);
+        } else if (!ret) {
+            ret = QOBJECT(qdict_new());
+        }
+        break;
     }
 
     QDECREF(args);
@@ -125,39 +114,17 @@ static QObject *do_qmp_dispatch(QmpCommandList *cmds, QObject *request,
 QObject *qmp_build_error_object(Error *err)
 {
     return qobject_from_jsonf("{ 'class': %s, 'desc': %s }",
-                              QapiErrorClass_str(error_get_class(err)),
+                              ErrorClass_lookup[error_get_class(err)],
                               error_get_pretty(err));
 }
 
-/*
- * Detect whether a request should be run out-of-band, by quickly
- * peeking at whether we have: { "control": { "run-oob": true } }. By
- * default commands are run in-band.
- */
-bool qmp_is_oob(QDict *dict)
-{
-    QBool *bool_obj;
-
-    dict = qdict_get_qdict(dict, "control");
-    if (!dict) {
-        return false;
-    }
-
-    bool_obj = qobject_to(QBool, qdict_get(dict, "run-oob"));
-    if (!bool_obj) {
-        return false;
-    }
-
-    return qbool_get_bool(bool_obj);
-}
-
-QObject *qmp_dispatch(QmpCommandList *cmds, QObject *request)
+QObject *qmp_dispatch(QObject *request)
 {
     Error *err = NULL;
     QObject *ret;
     QDict *rsp;
 
-    ret = do_qmp_dispatch(cmds, request, &err);
+    ret = do_qmp_dispatch(request, &err);
 
     rsp = qdict_new();
     if (err) {

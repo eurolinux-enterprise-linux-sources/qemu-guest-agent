@@ -82,27 +82,19 @@ static uint8_t dhcp_request_options_data[] = {
 	DHCP_MESSAGE_TYPE, DHCP_BYTE ( 0 ),
 	DHCP_MAX_MESSAGE_SIZE,
 	DHCP_WORD ( ETH_MAX_MTU - 20 /* IP header */ - 8 /* UDP header */ ),
-	DHCP_CLIENT_ARCHITECTURE, DHCP_WORD ( DHCP_ARCH_CLIENT_ARCHITECTURE ),
-	DHCP_CLIENT_NDI, DHCP_OPTION ( DHCP_ARCH_CLIENT_NDI ),
-	DHCP_VENDOR_CLASS_ID,
-	DHCP_STRING ( DHCP_VENDOR_PXECLIENT ( DHCP_ARCH_CLIENT_ARCHITECTURE,
-					      DHCP_ARCH_CLIENT_NDI ) ),
+	DHCP_CLIENT_ARCHITECTURE, DHCP_ARCH_CLIENT_ARCHITECTURE,
+	DHCP_CLIENT_NDI, DHCP_ARCH_CLIENT_NDI,
+	DHCP_VENDOR_CLASS_ID, DHCP_ARCH_VENDOR_CLASS_ID,
 	DHCP_USER_CLASS_ID, DHCP_STRING ( 'i', 'P', 'X', 'E' ),
 	DHCP_PARAMETER_REQUEST_LIST,
 	DHCP_OPTION ( DHCP_SUBNET_MASK, DHCP_ROUTERS, DHCP_DNS_SERVERS,
 		      DHCP_LOG_SERVERS, DHCP_HOST_NAME, DHCP_DOMAIN_NAME,
-		      DHCP_ROOT_PATH, DHCP_MTU, DHCP_VENDOR_ENCAP,
-		      DHCP_VENDOR_CLASS_ID, DHCP_TFTP_SERVER_NAME,
-		      DHCP_BOOTFILE_NAME, DHCP_DOMAIN_SEARCH,
+		      DHCP_ROOT_PATH, DHCP_VENDOR_ENCAP, DHCP_VENDOR_CLASS_ID,
+		      DHCP_TFTP_SERVER_NAME, DHCP_BOOTFILE_NAME,
+		      DHCP_DOMAIN_SEARCH,
 		      128, 129, 130, 131, 132, 133, 134, 135, /* for PXE */
 		      DHCP_EB_ENCAP, DHCP_ISCSI_INITIATOR_IQN ),
 	DHCP_END
-};
-
-/** Settings copied in to all DHCP requests */
-static const struct setting * dhcp_request_settings[] = {
-	&user_class_setting,
-	&vendor_class_setting,
 };
 
 /** DHCP server address setting */
@@ -304,9 +296,8 @@ static void dhcp_set_state ( struct dhcp_session *dhcp,
  */
 static int dhcp_has_pxeopts ( struct dhcp_packet *dhcppkt ) {
 
-	/* Check for a next-server and boot filename */
-	if ( dhcppkt->dhcphdr->siaddr.s_addr &&
-	     ( dhcppkt_fetch ( dhcppkt, DHCP_BOOTFILE_NAME, NULL, 0 ) > 0 ) )
+	/* Check for a boot filename */
+	if ( dhcppkt_fetch ( dhcppkt, DHCP_BOOTFILE_NAME, NULL, 0 ) > 0 )
 		return 1;
 
 	/* Check for a PXE boot menu */
@@ -452,10 +443,8 @@ static void dhcp_discovery_expired ( struct dhcp_session *dhcp ) {
 	unsigned long elapsed = ( currticks() - dhcp->start );
 
 	/* If link is blocked, defer DHCP discovery (and reset timeout) */
-	if ( netdev_link_blocked ( dhcp->netdev ) &&
-	     ( dhcp->count <= DHCP_DISC_MAX_DEFERRALS ) ) {
+	if ( netdev_link_blocked ( dhcp->netdev ) ) {
 		DBGC ( dhcp, "DHCP %p deferring discovery\n", dhcp );
-		dhcp->start = currticks();
 		start_timer_fixed ( &dhcp->timer,
 				    ( DHCP_DISC_START_TIMEOUT_SEC *
 				      TICKS_PER_SEC ) );
@@ -981,13 +970,11 @@ int dhcp_create_request ( struct dhcp_packet *dhcppkt,
 	struct dhcp_netdev_desc dhcp_desc;
 	struct dhcp_client_id client_id;
 	struct dhcp_client_uuid client_uuid;
-	const struct setting *setting;
 	uint8_t *dhcp_features;
 	size_t dhcp_features_len;
 	size_t ll_addr_len;
-	void *raw;
+	void *user_class;
 	ssize_t len;
-	unsigned int i;
 	int rc;
 
 	/* Create DHCP packet */
@@ -1055,23 +1042,19 @@ int dhcp_create_request ( struct dhcp_packet *dhcppkt,
 		}
 	}
 
-	/* Add request settings, if applicable */
-	for ( i = 0 ; i < ( sizeof ( dhcp_request_settings ) /
-			    sizeof ( dhcp_request_settings[0] ) ) ; i++ ) {
-		setting = dhcp_request_settings[i];
-		if ( ( len = fetch_raw_setting_copy ( NULL, setting,
-						      &raw ) ) >= 0 ) {
-			rc = dhcppkt_store ( dhcppkt, setting->tag, raw, len );
-			free ( raw );
-			if ( rc != 0 ) {
-				DBG ( "DHCP could not set %s: %s\n",
-				      setting->name, strerror ( rc ) );
-				goto err_store_raw;
-			}
+	/* Add user class, if we have one. */
+	if ( ( len = fetch_raw_setting_copy ( NULL, &user_class_setting,
+					      &user_class ) ) >= 0 ) {
+		if ( ( rc = dhcppkt_store ( dhcppkt, DHCP_USER_CLASS_ID,
+					    user_class, len ) ) != 0 ) {
+			DBG ( "DHCP could not set user class: %s\n",
+			      strerror ( rc ) );
+			goto err_store_user_class;
 		}
 	}
 
- err_store_raw:
+ err_store_user_class:
+	free ( user_class );
  err_store_client_uuid:
  err_store_client_id:
  err_store_busid:
@@ -1130,7 +1113,7 @@ static int dhcp_tx ( struct dhcp_session *dhcp ) {
 	 * session state into packet traces.  Useful for extracting
 	 * debug information from non-debug builds.
 	 */
-	dhcppkt.dhcphdr->secs = htons ( ( dhcp->count << 2 ) |
+	dhcppkt.dhcphdr->secs = htons ( ( ++(dhcp->count) << 2 ) |
 					( dhcp->offer.s_addr ? 0x02 : 0 ) |
 					( dhcp->proxy_offer ? 0x01 : 0 ) );
 
@@ -1273,9 +1256,6 @@ static void dhcp_timer_expired ( struct retry_timer *timer, int fail ) {
 		dhcp_finished ( dhcp, -ETIMEDOUT );
 		return;
 	}
-
-	/* Increment transmission counter */
-	dhcp->count++;
 
 	/* Handle timer expiry based on current state */
 	dhcp->state->expired ( dhcp );

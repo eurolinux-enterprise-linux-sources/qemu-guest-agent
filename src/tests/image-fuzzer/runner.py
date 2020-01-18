@@ -157,7 +157,7 @@ class TestEnv(object):
 
         try:
             os.makedirs(self.current_dir)
-        except OSError as e:
+        except OSError, e:
             print >>sys.stderr, \
                 "Error: The working directory '%s' cannot be used. Reason: %s"\
                 % (self.work_dir, e[1])
@@ -244,7 +244,7 @@ class TestEnv(object):
             temp_log = StringIO.StringIO()
             try:
                 retcode = run_app(temp_log, current_cmd)
-            except OSError as e:
+            except OSError, e:
                 multilog("%sError: Start of '%s' failed. Reason: %s\n\n"
                          % (test_summary, os.path.basename(current_cmd[0]),
                             e[1]),
@@ -356,7 +356,7 @@ if __name__ == '__main__':
         opts, args = getopt.gnu_getopt(sys.argv[1:], 'c:hs:kvd:',
                                        ['command=', 'help', 'seed=', 'config=',
                                         'keep_passed', 'verbose', 'duration='])
-    except getopt.error as e:
+    except getopt.error, e:
         print >>sys.stderr, \
             "Error: %s\n\nTry 'runner.py --help' for more information" % e
         sys.exit(1)
@@ -374,7 +374,7 @@ if __name__ == '__main__':
         elif opt in ('-c', '--command'):
             try:
                 command = json.loads(arg)
-            except (TypeError, ValueError, NameError) as e:
+            except (TypeError, ValueError, NameError), e:
                 print >>sys.stderr, \
                     "Error: JSON array of test commands cannot be loaded.\n" \
                     "Reason: %s" % e
@@ -390,7 +390,7 @@ if __name__ == '__main__':
         elif opt == '--config':
             try:
                 config = json.loads(arg)
-            except (TypeError, ValueError, NameError) as e:
+            except (TypeError, ValueError, NameError), e:
                 print >>sys.stderr, \
                     "Error: JSON array with the fuzzer configuration cannot" \
                     " be loaded\nReason: %s" % e
@@ -414,7 +414,7 @@ if __name__ == '__main__':
 
     try:
         image_generator = __import__(generator_name)
-    except ImportError as e:
+    except ImportError, e:
         print >>sys.stderr, \
             "Error: The image generator '%s' cannot be imported.\n" \
             "Reason: %s" % (generator_name, e)

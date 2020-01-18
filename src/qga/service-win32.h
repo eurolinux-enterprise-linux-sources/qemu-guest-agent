@@ -10,9 +10,8 @@
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  * See the COPYING file in the top-level directory.
  */
-
-#ifndef QGA_SERVICE_WIN32_H
-#define QGA_SERVICE_WIN32_H
+#ifndef QGA_SERVICE_H
+#define QGA_SERVICE_H
 
 #include <windows.h>
 

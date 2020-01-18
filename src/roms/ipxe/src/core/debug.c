@@ -194,12 +194,8 @@ static int dbg_autocolour ( unsigned long stream ) {
  * @v stream		Message stream ID
  */
 void dbg_autocolourise ( unsigned long stream ) {
-
-	if ( DBGCOL_MIN ) {
-		dbg_printf ( "\033[%dm",
-			     ( stream ?
-			       ( DBGCOL_MIN + dbg_autocolour ( stream ) ) : 0));
-	}
+	dbg_printf ( "\033[%dm",
+		     ( stream ? ( DBGCOL_MIN + dbg_autocolour ( stream ) ) :0));
 }
 
 /**
@@ -207,7 +203,5 @@ void dbg_autocolourise ( unsigned long stream ) {
  *
  */
 void dbg_decolourise ( void ) {
-
-	if ( DBGCOL_MIN )
-		dbg_printf ( "\033[0m" );
+	dbg_printf ( "\033[0m" );
 }

@@ -7,8 +7,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
+#include <string.h>
 #include "libqtest.h"
+#include "qemu/osdep.h"
 
 /* Tests only initialization so far. TODO: Replace with functional tests */
 static void test_device(gconstpointer data)
@@ -44,7 +46,6 @@ int main(int argc, char **argv)
 
         path = g_strdup_printf("e1000/%s", models[i]);
         qtest_add_data_func(path, models[i], test_device);
-        g_free(path);
     }
 
     return g_test_run();

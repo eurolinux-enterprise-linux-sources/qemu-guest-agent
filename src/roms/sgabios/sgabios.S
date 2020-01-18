@@ -1728,7 +1728,6 @@ write_string_tail:
 
 set_cursor_position:
   pushw %ax
-  pushw %bx
   pushw %ds
   pushw $BDA_SEG
   popw %ds                             /* ds = 0x40 */
@@ -1739,7 +1738,6 @@ set_cursor_position:
   movw %ax, %bx                        /* bx = cursor save offset */
   movw %dx, (%bx)                      /* save new cursor value */
   popw %ds
-  popw %bx
   popw %ax
   ret
 

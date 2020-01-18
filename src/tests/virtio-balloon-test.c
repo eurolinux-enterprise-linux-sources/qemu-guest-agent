@@ -7,12 +7,13 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
+#include <string.h>
 #include "libqtest.h"
-#include "libqos/virtio.h"
+#include "qemu/osdep.h"
 
 /* Tests only initialization so far. TODO: Replace with functional tests */
-static void balloon_nop(void)
+static void pci_nop(void)
 {
 }
 
@@ -21,10 +22,9 @@ int main(int argc, char **argv)
     int ret;
 
     g_test_init(&argc, &argv, NULL);
-    qtest_add_func("/virtio/balloon/nop", balloon_nop);
+    qtest_add_func("/virtio/balloon/pci/nop", pci_nop);
 
-    global_qtest = qtest_startf("-device virtio-balloon-%s",
-                                qvirtio_get_dev_type());
+    qtest_start("-device virtio-balloon-pci");
     ret = g_test_run();
 
     qtest_end();

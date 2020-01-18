@@ -33,7 +33,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/job.h>
 #include <ipxe/monojob.h>
 #include <ipxe/timer.h>
-#include <ipxe/errortab.h>
 #include <usr/ifmgmt.h>
 
 /** @file
@@ -50,11 +49,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define EINFO_EADDRNOTAVAIL_CONFIG					\
 	__einfo_uniqify ( EINFO_EADDRNOTAVAIL, 0x01,			\
 			  "No configuration methods succeeded" )
-
-/** Human-readable error message */
-struct errortab ifmgmt_errors[] __errortab = {
-	__einfo_errortab ( EINFO_EADDRNOTAVAIL_CONFIG ),
-};
 
 /**
  * Open network device

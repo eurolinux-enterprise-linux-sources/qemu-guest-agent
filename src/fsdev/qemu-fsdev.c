@@ -1,5 +1,5 @@
 /*
- * 9p
+ * Virtio 9p
  *
  * Copyright IBM, Corp. 2010
  *
@@ -8,15 +8,15 @@
  *
  * This work is licensed under the terms of the GNU GPL, version 2.  See
  * the COPYING file in the top-level directory.
+ *
  */
-
-#include "qemu/osdep.h"
-#include "qapi/error.h"
+#include <stdio.h>
+#include <string.h>
 #include "qemu-fsdev.h"
 #include "qemu/queue.h"
+#include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "qemu/config-file.h"
-#include "qemu/error-report.h"
-#include "qemu/option.h"
 
 static QTAILQ_HEAD(FsDriverEntry_head, FsDriverListEntry) fsdriver_entries =
     QTAILQ_HEAD_INITIALIZER(fsdriver_entries);
@@ -38,10 +38,9 @@ int qemu_fsdev_add(QemuOpts *opts)
     const char *fsdriver = qemu_opt_get(opts, "fsdriver");
     const char *writeout = qemu_opt_get(opts, "writeout");
     bool ro = qemu_opt_get_bool(opts, "readonly", 0);
-    Error *local_err = NULL;
 
     if (!fsdev_id) {
-        error_report("fsdev: No id specified");
+        fprintf(stderr, "fsdev: No id specified\n");
         return -1;
     }
 
@@ -53,11 +52,11 @@ int qemu_fsdev_add(QemuOpts *opts)
         }
 
         if (i == ARRAY_SIZE(FsDrivers)) {
-            error_report("fsdev: fsdriver %s not found", fsdriver);
+            fprintf(stderr, "fsdev: fsdriver %s not found\n", fsdriver);
             return -1;
         }
     } else {
-        error_report("fsdev: No fsdriver specified");
+        fprintf(stderr, "fsdev: No fsdriver specified\n");
         return -1;
     }
 
@@ -76,8 +75,7 @@ int qemu_fsdev_add(QemuOpts *opts)
     }
 
     if (fsle->fse.ops->parse_opts) {
-        if (fsle->fse.ops->parse_opts(opts, &fsle->fse, &local_err)) {
-            error_report_err(local_err);
+        if (fsle->fse.ops->parse_opts(opts, &fsle->fse)) {
             g_free(fsle->fse.fsdev_id);
             g_free(fsle);
             return -1;

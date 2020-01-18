@@ -17,11 +17,10 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/sysbus.h"
 #include "trace.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 
 #include "hw/char/lm32_juart.h"
 
@@ -44,7 +43,7 @@ enum {
 struct LM32JuartState {
     SysBusDevice parent_obj;
 
-    CharBackend chr;
+    CharDriverState *chr;
 
     uint32_t jtx;
     uint32_t jrx;
@@ -75,9 +74,9 @@ void lm32_juart_set_jtx(DeviceState *d, uint32_t jtx)
     trace_lm32_juart_set_jtx(s->jtx);
 
     s->jtx = jtx;
-    /* XXX this blocks entire thread. Rewrite to use
-     * qemu_chr_fe_write and background I/O callbacks */
-    qemu_chr_fe_write_all(&s->chr, &ch, 1);
+    if (s->chr) {
+        qemu_chr_fe_write_all(s->chr, &ch, 1);
+    }
 }
 
 void lm32_juart_set_jrx(DeviceState *d, uint32_t jtx)
@@ -114,12 +113,17 @@ static void juart_reset(DeviceState *d)
     s->jrx = 0;
 }
 
-static void lm32_juart_realize(DeviceState *dev, Error **errp)
+static int lm32_juart_init(SysBusDevice *dev)
 {
     LM32JuartState *s = LM32_JUART(dev);
 
-    qemu_chr_fe_set_handlers(&s->chr, juart_can_rx, juart_rx,
-                             juart_event, NULL, s, NULL, true);
+    /* FIXME use a qdev chardev prop instead of qemu_char_get_next_serial() */
+    s->chr = qemu_char_get_next_serial();
+    if (s->chr) {
+        qemu_chr_add_handlers(s->chr, juart_can_rx, juart_rx, juart_event, s);
+    }
+
+    return 0;
 }
 
 static const VMStateDescription vmstate_lm32_juart = {
@@ -133,19 +137,16 @@ static const VMStateDescription vmstate_lm32_juart = {
     }
 };
 
-static Property lm32_juart_properties[] = {
-    DEFINE_PROP_CHR("chardev", LM32JuartState, chr),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
 static void lm32_juart_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
+    k->init = lm32_juart_init;
     dc->reset = juart_reset;
     dc->vmsd = &vmstate_lm32_juart;
-    dc->props = lm32_juart_properties;
-    dc->realize = lm32_juart_realize;
+    /* Reason: init() method uses qemu_char_get_next_serial() */
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo lm32_juart_info = {

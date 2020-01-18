@@ -29,8 +29,6 @@
  * SUCH DAMAGE.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "trace.h"
@@ -71,16 +69,14 @@ static const MemoryRegionOps xen_pv_mmio_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
 };
 
-static void xen_pv_realize(PCIDevice *pci_dev, Error **errp)
+static int xen_pv_init(PCIDevice *pci_dev)
 {
     XenPVDevice *d = XEN_PV_DEVICE(pci_dev);
     uint8_t *pci_conf;
 
     /* device-id property must always be supplied */
-    if (d->device_id == 0xffff) {
-        error_setg(errp, "Device ID invalid, it must always be supplied");
-        return;
-    }
+    if (d->device_id == 0xffff)
+	    return -1;
 
     pci_conf = pci_dev->config;
 
@@ -101,6 +97,8 @@ static void xen_pv_realize(PCIDevice *pci_dev, Error **errp)
 
     pci_register_bar(pci_dev, 1, PCI_BASE_ADDRESS_MEM_PREFETCH,
                      &d->mmio);
+
+    return 0;
 }
 
 static Property xen_pv_props[] = {
@@ -116,7 +114,7 @@ static void xen_pv_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
-    k->realize = xen_pv_realize;
+    k->init = xen_pv_init;
     k->class_id = PCI_CLASS_SYSTEM_OTHER;
     dc->desc = "Xen PV Device";
     dc->props = xen_pv_props;
@@ -127,10 +125,6 @@ static const TypeInfo xen_pv_type_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(XenPVDevice),
     .class_init    = xen_pv_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void xen_pv_register_types(void)

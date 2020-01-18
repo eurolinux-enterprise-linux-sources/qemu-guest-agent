@@ -86,23 +86,14 @@ entry_10:
         ENTRY_ARG_VGA handle_10
         iretw
 
-#define VGA_CUSTOM_BDA_FLAGS 0xb9
-#define BF_EXTRA_STACK 0x40
-
         // Entry point using extra stack
         DECLFUNC entry_10_extrastack
 entry_10_extrastack:
         cli
         cld
-        pushw %ds
+        pushw %ds               // Set %ds:%eax to space on ExtraStack
         pushl %eax
-
-        movw $SEG_BDA, %ax      // Check if extra stack is enabled
-        movw %ax, %ds
-        testb $BF_EXTRA_STACK, VGA_CUSTOM_BDA_FLAGS
-        jz 1f
-
-        movw %cs:ExtraStackSeg, %ds // Set %ds:%eax to space on ExtraStack
+        movw %cs:ExtraStackSeg, %ds
         movl $(CONFIG_VGA_EXTRA_STACK_SIZE-PUSHBREGS_size-16), %eax
         SAVEBREGS_POP_DSEAX     // Save registers on extra stack
         movl %esp, PUSHBREGS_size+8(%eax)
@@ -124,11 +115,6 @@ entry_10_extrastack:
         pushl BREGS_code(%eax)
         RESTOREBREGS_DSEAX
         iretw
-
-1:      // Use regular entry point if the extra stack is disabled
-        popl %eax
-        popw %ds
-        jmp entry_10
 
         // Timer irq handling
         DECLFUNC entry_timer_hook

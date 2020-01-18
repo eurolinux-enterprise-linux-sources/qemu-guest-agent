@@ -9,9 +9,8 @@
  * directory.
  */
 
-#include "qemu/osdep.h"
 #include "cpu.h"
-#include "hw/s390x/s390-virtio-hcall.h"
+#include "hw/s390x/s390-virtio.h"
 
 #define MAX_DIAG_SUBCODES 255
 

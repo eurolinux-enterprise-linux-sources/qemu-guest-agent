@@ -3,12 +3,10 @@
 *.test.dts
 tmp.*
 /add_subnode_with_nops
-/addr_size_cells
 /appendprop[12]
 /asm_tree_dump
 /boot-cpuid
 /char_literal
-/check_path
 /del_node
 /del_property
 /dtbs_equal_ordered
@@ -36,14 +34,11 @@ tmp.*
 /nopulate
 /notfound
 /open_pack
-/overlay
-/overlay_bad_fixup
 /parent_offset
 /path-references
 /path_offset
 /path_offset_aliases
 /phandle_format
-/property_iterate
 /propname_escapes
 /references
 /root_node
@@ -53,7 +48,6 @@ tmp.*
 /setprop_inplace
 /sized_cells
 /string_escapes
-/stringlist
 /subnode_iterate
 /subnode_offset
 /supernode_atdepth_offset

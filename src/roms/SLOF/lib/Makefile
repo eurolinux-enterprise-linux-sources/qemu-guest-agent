@@ -11,7 +11,7 @@
 # ****************************************************************************/
 
 SUBDIRS = libc libipmi libbootmsg libbases libnvram libelf libhvcall libvirtio \
-          libusb libveth libe1k libbcm libnet libbootmenu
+          libusb libveth libe1k libbcm
 
 all:  subdirs
 
@@ -21,7 +21,7 @@ all:  subdirs
 subdirs: $(SUBDIRS)
 
 $(SUBDIRS):
-	$(MAKE) -C $@ FLAG=$(FLAG) $(MAKEARG)
+	$(MAKE) -C $@ $(MAKEARG)
 
 # Rules for making clean:
 clean:

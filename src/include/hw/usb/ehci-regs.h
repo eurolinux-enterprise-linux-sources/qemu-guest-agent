@@ -1,5 +1,5 @@
 #ifndef HW_USB_EHCI_REGS_H
-#define HW_USB_EHCI_REGS_H
+#define HW_USB_EHCI_REGS_H 1
 
 /* Capability Registers Base Address - section 2.2 */
 #define CAPLENGTH        0x0000  /* 1-byte, 0x0001 reserved */

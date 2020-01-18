@@ -280,7 +280,8 @@ invoke_mouse_handler(void)
     if (!CONFIG_MOUSE)
         return;
     if (need_hop_back()) {
-        stack_hop_back(invoke_mouse_handler, 0, 0);
+        extern void _cfunc16_invoke_mouse_handler(void);
+        stack_hop_back(0, 0, _cfunc16_invoke_mouse_handler);
         return;
     }
     ASSERT16();

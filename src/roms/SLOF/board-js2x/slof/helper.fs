@@ -11,7 +11,7 @@
 \ ****************************************************************************/
 
 : slof-build-id  ( -- str len )
-   flash-header 10 + dup from-cstring a min
+   flash-header 10 + a
 ;
 
 : slof-revision s" 001" ;
@@ -36,13 +36,4 @@
       dup OF 0 ?DO dup dup rb@ -1 xor swap rb! 1+ LOOP ENDOF
    ENDCASE
    drop
-;
-
-\ count the number of bits equal 1
-\ the idea is to clear in each step the least significant bit
-\ v&(v-1) does exactly this, so count the steps until v == 0
-: cnt-bits  ( 64-bit-value -- #bits=1 )
-    dup IF
-        41 1 DO dup 1- and dup 0= IF drop i LEAVE THEN LOOP
-    THEN
 ;

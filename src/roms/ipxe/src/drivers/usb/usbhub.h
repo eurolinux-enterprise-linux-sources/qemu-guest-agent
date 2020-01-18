@@ -257,20 +257,12 @@ struct usb_hub_device {
 	struct usb_hub *hub;
 	/** Features */
 	unsigned int features;
-	/** Flags */
-	unsigned int flags;
 
 	/** Interrupt endpoint */
 	struct usb_endpoint intr;
 	/** Interrupt endpoint refill process */
 	struct process refill;
 };
-
-/** Hub requires additional settling delay */
-#define USB_HUB_SLOW_START 0x0001
-
-/** Additional setting delay for out-of-spec hubs */
-#define USB_HUB_SLOW_START_DELAY_MS 500
 
 /** Interrupt ring fill level
  *

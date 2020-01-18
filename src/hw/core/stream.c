@@ -1,4 +1,3 @@
-#include "qemu/osdep.h"
 #include "hw/stream.h"
 
 size_t

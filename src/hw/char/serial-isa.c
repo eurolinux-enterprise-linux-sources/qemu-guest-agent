@@ -23,8 +23,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "hw/char/serial.h"
 #include "hw/isa/isa.h"
 
@@ -121,7 +119,7 @@ static void serial_register_types(void)
 
 type_init(serial_register_types)
 
-static void serial_isa_init(ISABus *bus, int index, Chardev *chr)
+static void serial_isa_init(ISABus *bus, int index, CharDriverState *chr)
 {
     DeviceState *dev;
     ISADevice *isadev;
@@ -133,14 +131,13 @@ static void serial_isa_init(ISABus *bus, int index, Chardev *chr)
     qdev_init_nofail(dev);
 }
 
-void serial_hds_isa_init(ISABus *bus, int from, int to)
+void serial_hds_isa_init(ISABus *bus, int n)
 {
     int i;
 
-    assert(from >= 0);
-    assert(to <= MAX_SERIAL_PORTS);
+    assert(n <= MAX_SERIAL_PORTS);
 
-    for (i = from; i < to; ++i) {
+    for (i = 0; i < n; ++i) {
         if (serial_hds[i]) {
             serial_isa_init(bus, i, serial_hds[i]);
         }

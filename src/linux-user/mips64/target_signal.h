@@ -1,5 +1,5 @@
-#ifndef MIPS64_TARGET_SIGNAL_H
-#define MIPS64_TARGET_SIGNAL_H
+#ifndef TARGET_SIGNAL_H
+#define TARGET_SIGNAL_H
 
 #include "cpu.h"
 
@@ -26,5 +26,4 @@ static inline abi_ulong get_sp_from_cpustate(CPUMIPSState *state)
     return state->active_tc.gpr[29];
 }
 
-
-#endif /* MIPS64_TARGET_SIGNAL_H */
+#endif /* TARGET_SIGNAL_H */

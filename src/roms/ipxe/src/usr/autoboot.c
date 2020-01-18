@@ -87,6 +87,33 @@ __weak int pxe_menu_boot ( struct net_device *netdev __unused ) {
 	return -ENOTSUP;
 }
 
+/**
+ * Parse next-server and filename into a URI
+ *
+ * @v next_server	Next-server address
+ * @v filename		Filename
+ * @ret uri		URI, or NULL on failure
+ */
+static struct uri * parse_next_server_and_filename ( struct in_addr next_server,
+						     const char *filename ) {
+	struct uri *uri;
+
+	/* Parse filename */
+	uri = parse_uri ( filename );
+	if ( ! uri )
+		return NULL;
+
+	/* Construct a TFTP URI for the filename, if applicable */
+	if ( next_server.s_addr && filename[0] && ! uri_is_absolute ( uri ) ) {
+		uri_put ( uri );
+		uri = tftp_uri ( next_server, 0, filename );
+		if ( ! uri )
+			return NULL;
+	}
+
+	return uri;
+}
+
 /** The "keep-san" setting */
 const struct setting keep_san_setting __setting ( SETTING_SANBOOT_EXTRA,
 						  keep-san ) = {
@@ -109,10 +136,8 @@ const struct setting skip_san_boot_setting __setting ( SETTING_SANBOOT_EXTRA,
  * Boot from filename and root-path URIs
  *
  * @v filename		Filename
- * @v root_paths	Root path(s)
- * @v root_path_count	Number of root paths
+ * @v root_path		Root path
  * @v drive		SAN drive (if applicable)
- * @v san_filename	SAN filename (or NULL to use default)
  * @v flags		Boot action flags
  * @ret rc		Return status code
  *
@@ -122,19 +147,14 @@ const struct setting skip_san_boot_setting __setting ( SETTING_SANBOOT_EXTRA,
  * provide backwards compatibility for the "keep-san" and
  * "skip-san-boot" options.
  */
-int uriboot ( struct uri *filename, struct uri **root_paths,
-	      unsigned int root_path_count, int drive,
-	      const char *san_filename, unsigned int flags ) {
+int uriboot ( struct uri *filename, struct uri *root_path, int drive,
+	      unsigned int flags ) {
 	struct image *image;
 	int rc;
 
 	/* Hook SAN device, if applicable */
-	if ( root_path_count ) {
-		drive = san_hook ( drive, root_paths, root_path_count,
-				   ( ( flags & URIBOOT_NO_SAN_DESCRIBE ) ?
-				     SAN_NO_DESCRIBE : 0 ) );
-		if ( drive < 0 ) {
-			rc = drive;
+	if ( root_path ) {
+		if ( ( rc = san_hook ( root_path, drive ) ) != 0 ) {
 			printf ( "Could not open SAN device: %s\n",
 				 strerror ( rc ) );
 			goto err_san_hook;
@@ -143,10 +163,10 @@ int uriboot ( struct uri *filename, struct uri **root_paths,
 	}
 
 	/* Describe SAN device, if applicable */
-	if ( ! ( flags & URIBOOT_NO_SAN_DESCRIBE ) ) {
-		if ( ( rc = san_describe() ) != 0 ) {
-			printf ( "Could not describe SAN devices: %s\n",
-				 strerror ( rc ) );
+	if ( ( drive >= 0 ) && ! ( flags & URIBOOT_NO_SAN_DESCRIBE ) ) {
+		if ( ( rc = san_describe ( drive ) ) != 0 ) {
+			printf ( "Could not describe SAN device %#02x: %s\n",
+				 drive, strerror ( rc ) );
 			goto err_san_describe;
 		}
 	}
@@ -177,12 +197,10 @@ int uriboot ( struct uri *filename, struct uri **root_paths,
 	}
 
 	/* Attempt SAN boot if applicable */
-	if ( ! ( flags & URIBOOT_NO_SAN_BOOT ) ) {
+	if ( ( drive >= 0 ) && ! ( flags & URIBOOT_NO_SAN_BOOT ) ) {
 		if ( fetch_intz_setting ( NULL, &skip_san_boot_setting) == 0 ) {
-			printf ( "Booting%s%s from SAN device %#02x\n",
-				 ( san_filename ? " " : "" ),
-				 ( san_filename ? san_filename : "" ), drive );
-			rc = san_boot ( drive, san_filename );
+			printf ( "Booting from SAN device %#02x\n", drive );
+			rc = san_boot ( drive );
 			printf ( "Boot from SAN device %#02x failed: %s\n",
 				 drive, strerror ( rc ) );
 		} else {
@@ -197,7 +215,7 @@ int uriboot ( struct uri *filename, struct uri **root_paths,
  err_download:
  err_san_describe:
 	/* Unhook SAN device, if applicable */
-	if ( ! ( flags & URIBOOT_NO_SAN_UNHOOK ) ) {
+	if ( ( drive >= 0 ) && ! ( flags & URIBOOT_NO_SAN_UNHOOK ) ) {
 		if ( fetch_intz_setting ( NULL, &keep_san_setting ) == 0 ) {
 			san_unhook ( drive );
 			printf ( "Unregistered SAN device %#02x\n", drive );
@@ -232,16 +250,10 @@ static void close_all_netdevs ( void ) {
  * @ret uri		URI, or NULL on failure
  */
 struct uri * fetch_next_server_and_filename ( struct settings *settings ) {
-	union {
-		struct sockaddr sa;
-		struct sockaddr_in sin;
-	} next_server;
+	struct in_addr next_server = { 0 };
 	char *raw_filename = NULL;
 	struct uri *uri = NULL;
 	char *filename;
-
-	/* Initialise server address */
-	memset ( &next_server, 0, sizeof ( next_server ) );
 
 	/* If we have a filename, fetch it along with the next-server
 	 * setting from the same settings block.
@@ -251,27 +263,20 @@ struct uri * fetch_next_server_and_filename ( struct settings *settings ) {
 		fetch_string_setting_copy ( settings, &filename_setting,
 					    &raw_filename );
 		fetch_ipv4_setting ( settings, &next_server_setting,
-				     &next_server.sin.sin_addr );
-	}
-	if ( ! raw_filename )
-		goto err_fetch;
-
-	/* Populate server address */
-	if ( next_server.sin.sin_addr.s_addr ) {
-		next_server.sin.sin_family = AF_INET;
-		printf ( "Next server: %s\n",
-			 inet_ntoa ( next_server.sin.sin_addr ) );
+				     &next_server );
 	}
 
 	/* Expand filename setting */
-	filename = expand_settings ( raw_filename );
+	filename = expand_settings ( raw_filename ? raw_filename : "" );
 	if ( ! filename )
 		goto err_expand;
+
+	/* Parse next server and filename */
+	if ( next_server.s_addr )
+		printf ( "Next server: %s\n", inet_ntoa ( next_server ) );
 	if ( filename[0] )
 		printf ( "Filename: %s\n", filename );
-
-	/* Construct URI */
-	uri = pxe_uri ( &next_server.sa, filename );
+	uri = parse_next_server_and_filename ( next_server, filename );
 	if ( ! uri )
 		goto err_parse;
 
@@ -279,7 +284,6 @@ struct uri * fetch_next_server_and_filename ( struct settings *settings ) {
 	free ( filename );
  err_expand:
 	free ( raw_filename );
- err_fetch:
 	return uri;
 }
 
@@ -297,17 +301,15 @@ static struct uri * fetch_root_path ( struct settings *settings ) {
 	/* Fetch root-path setting */
 	fetch_string_setting_copy ( settings, &root_path_setting,
 				    &raw_root_path );
-	if ( ! raw_root_path )
-		goto err_fetch;
 
 	/* Expand filename setting */
-	root_path = expand_settings ( raw_root_path );
+	root_path = expand_settings ( raw_root_path ? raw_root_path : "" );
 	if ( ! root_path )
 		goto err_expand;
-	if ( root_path[0] )
-		printf ( "Root path: %s\n", root_path );
 
 	/* Parse root path */
+	if ( root_path[0] )
+		printf ( "Root path: %s\n", root_path );
 	uri = parse_uri ( root_path );
 	if ( ! uri )
 		goto err_parse;
@@ -316,37 +318,7 @@ static struct uri * fetch_root_path ( struct settings *settings ) {
 	free ( root_path );
  err_expand:
 	free ( raw_root_path );
- err_fetch:
 	return uri;
-}
-
-/**
- * Fetch san-filename setting
- *
- * @v settings		Settings block
- * @ret san_filename	SAN filename, or NULL on failure
- */
-static char * fetch_san_filename ( struct settings *settings ) {
-	char *raw_san_filename;
-	char *san_filename = NULL;
-
-	/* Fetch san-filename setting */
-	fetch_string_setting_copy ( settings, &san_filename_setting,
-				    &raw_san_filename );
-	if ( ! raw_san_filename )
-		goto err_fetch;
-
-	/* Expand san-filename setting */
-	san_filename = expand_settings ( raw_san_filename );
-	if ( ! san_filename )
-		goto err_expand;
-	if ( san_filename[0] )
-		printf ( "SAN filename: %s\n", san_filename );
-
- err_expand:
-	free ( raw_san_filename );
- err_fetch:
-	return san_filename;
 }
 
 /**
@@ -384,7 +356,6 @@ static int have_pxe_menu ( void ) {
 int netboot ( struct net_device *netdev ) {
 	struct uri *filename;
 	struct uri *root_path;
-	char *san_filename;
 	int rc;
 
 	/* Close all other network devices */
@@ -407,22 +378,32 @@ int netboot ( struct net_device *netdev ) {
 		goto err_pxe_menu_boot;
 	}
 
-	/* Fetch next server and filename (if any) */
+	/* Fetch next server and filename */
 	filename = fetch_next_server_and_filename ( NULL );
+	if ( ! filename )
+		goto err_filename;
+	if ( ! uri_has_path ( filename ) ) {
+		/* Ignore empty filename */
+		uri_put ( filename );
+		filename = NULL;
+	}
 
-	/* Fetch root path (if any) */
+	/* Fetch root path */
 	root_path = fetch_root_path ( NULL );
-
-	/* Fetch SAN filename (if any) */
-	san_filename = fetch_san_filename ( NULL );
+	if ( ! root_path )
+		goto err_root_path;
+	if ( ! uri_is_absolute ( root_path ) ) {
+		/* Ignore empty root path */
+		uri_put ( root_path );
+		root_path = NULL;
+	}
 
 	/* If we have both a filename and a root path, ignore an
-	 * unsupported or missing URI scheme in the root path, since
-	 * it may represent an NFS root.
+	 * unsupported URI scheme in the root path, since it may
+	 * represent an NFS root.
 	 */
 	if ( filename && root_path &&
-	     ( ( ! uri_is_absolute ( root_path ) ) ||
-	       ( xfer_uri_opener ( root_path->scheme ) == NULL ) ) ) {
+	     ( xfer_uri_opener ( root_path->scheme ) == NULL ) ) {
 		printf ( "Ignoring unsupported root path\n" );
 		uri_put ( root_path );
 		root_path = NULL;
@@ -436,16 +417,16 @@ int netboot ( struct net_device *netdev ) {
 	}
 
 	/* Boot using next server, filename and root path */
-	if ( ( rc = uriboot ( filename, &root_path, ( root_path ? 1 : 0 ),
-			      san_default_drive(), san_filename,
+	if ( ( rc = uriboot ( filename, root_path, san_default_drive(),
 			      ( root_path ? 0 : URIBOOT_NO_SAN ) ) ) != 0 )
 		goto err_uriboot;
 
  err_uriboot:
  err_no_boot:
-	free ( san_filename );
 	uri_put ( root_path );
+ err_root_path:
 	uri_put ( filename );
+ err_filename:
  err_pxe_menu_boot:
  err_dhcp:
  err_ifopen:

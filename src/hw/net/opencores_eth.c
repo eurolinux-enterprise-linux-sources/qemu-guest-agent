@@ -31,12 +31,9 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "hw/net/mii.h"
 #include "hw/sysbus.h"
 #include "net/net.h"
-#include "net/eth.h"
 #include "sysemu/sysemu.h"
 #include "trace.h"
 
@@ -57,6 +54,12 @@
 
 /* PHY MII registers */
 enum {
+    MII_BMCR,
+    MII_BMSR,
+    MII_PHYIDR1,
+    MII_PHYIDR2,
+    MII_ANAR,
+    MII_ANLPAR,
     MII_REG_MAX = 16,
 };
 
@@ -68,11 +71,10 @@ typedef struct Mii {
 static void mii_set_link(Mii *s, bool link_ok)
 {
     if (link_ok) {
-        s->regs[MII_BMSR] |= MII_BMSR_LINK_ST;
-        s->regs[MII_ANLPAR] |= MII_ANLPAR_TXFD | MII_ANLPAR_TX |
-            MII_ANLPAR_10FD | MII_ANLPAR_10 | MII_ANLPAR_CSMACD;
+        s->regs[MII_BMSR] |= 0x4;
+        s->regs[MII_ANLPAR] |= 0x01e1;
     } else {
-        s->regs[MII_BMSR] &= ~MII_BMSR_LINK_ST;
+        s->regs[MII_BMSR] &= ~0x4;
         s->regs[MII_ANLPAR] &= 0x01ff;
     }
     s->link_ok = link_ok;
@@ -81,14 +83,11 @@ static void mii_set_link(Mii *s, bool link_ok)
 static void mii_reset(Mii *s)
 {
     memset(s->regs, 0, sizeof(s->regs));
-    s->regs[MII_BMCR] = MII_BMCR_AUTOEN;
-    s->regs[MII_BMSR] = MII_BMSR_100TX_FD | MII_BMSR_100TX_HD |
-        MII_BMSR_10T_FD | MII_BMSR_10T_HD | MII_BMSR_MFPS |
-        MII_BMSR_AN_COMP | MII_BMSR_AUTONEG;
-    s->regs[MII_PHYID1] = 0x2000;
-    s->regs[MII_PHYID2] = 0x5c90;
-    s->regs[MII_ANAR] = MII_ANAR_TXFD | MII_ANAR_TX |
-        MII_ANAR_10FD | MII_ANAR_10 | MII_ANAR_CSMACD;
+    s->regs[MII_BMCR] = 0x1000;
+    s->regs[MII_BMSR] = 0x7848; /* no ext regs */
+    s->regs[MII_PHYIDR1] = 0x2000;
+    s->regs[MII_PHYIDR2] = 0x5c90;
+    s->regs[MII_ANAR] = 0x01e1;
     mii_set_link(s, s->link_ok);
 }
 
@@ -98,7 +97,7 @@ static void mii_ro(Mii *s, uint16_t v)
 
 static void mii_write_bmcr(Mii *s, uint16_t v)
 {
-    if (v & MII_BMCR_RESET) {
+    if (v & 0x8000) {
         mii_reset(s);
     } else {
         s->regs[MII_BMCR] = v;
@@ -110,8 +109,8 @@ static void mii_write_host(Mii *s, unsigned idx, uint16_t v)
     static void (*reg_write[MII_REG_MAX])(Mii *s, uint16_t v) = {
         [MII_BMCR] = mii_write_bmcr,
         [MII_BMSR] = mii_ro,
-        [MII_PHYID1] = mii_ro,
-        [MII_PHYID2] = mii_ro,
+        [MII_PHYIDR1] = mii_ro,
+        [MII_PHYIDR2] = mii_ro,
     };
 
     if (idx < MII_REG_MAX) {
@@ -374,7 +373,7 @@ static ssize_t open_eth_receive(NetClientState *nc,
         if (memcmp(buf, bcast_addr, sizeof(bcast_addr)) == 0) {
             miss = GET_REGBIT(s, MODER, BRO);
         } else if ((buf[0] & 0x1) || GET_REGBIT(s, MODER, IAM)) {
-            unsigned mcast_idx = net_crc32(buf, ETH_ALEN) >> 26;
+            unsigned mcast_idx = compute_mcast_idx(buf);
             miss = !(s->regs[HASH0 + mcast_idx / 32] &
                     (1 << (mcast_idx % 32)));
             trace_open_eth_receive_mcast(
@@ -474,7 +473,7 @@ static ssize_t open_eth_receive(NetClientState *nc,
 }
 
 static NetClientInfo net_open_eth_info = {
-    .type = NET_CLIENT_DRIVER_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .can_receive = open_eth_can_receive,
     .receive = open_eth_receive,
@@ -483,8 +482,7 @@ static NetClientInfo net_open_eth_info = {
 
 static void open_eth_start_xmit(OpenEthState *s, desc *tx)
 {
-    uint8_t *buf = NULL;
-    uint8_t buffer[0x600];
+    uint8_t buf[65536];
     unsigned len = GET_FIELD(tx->len_flags, TXD_LEN);
     unsigned tx_len = len;
 
@@ -499,11 +497,6 @@ static void open_eth_start_xmit(OpenEthState *s, desc *tx)
 
     trace_open_eth_start_xmit(tx->buf_ptr, len, tx_len);
 
-    if (tx_len > sizeof(buffer)) {
-        buf = g_new(uint8_t, tx_len);
-    } else {
-        buf = buffer;
-    }
     if (len > tx_len) {
         len = tx_len;
     }
@@ -512,9 +505,6 @@ static void open_eth_start_xmit(OpenEthState *s, desc *tx)
         memset(buf + len, 0, tx_len - len);
     }
     qemu_send_packet(qemu_get_queue(s->nic), buf, tx_len);
-    if (tx_len > sizeof(buffer)) {
-        g_free(buf);
-    }
 
     if (tx->len_flags & TXD_WR) {
         s->tx_desc = 0;

@@ -6,8 +6,8 @@
  * top-level directory.
  */
 
-#ifndef IVSHMEM_CLIENT_H
-#define IVSHMEM_CLIENT_H
+#ifndef _IVSHMEM_CLIENT_H_
+#define _IVSHMEM_CLIENT_H_
 
 /**
  * This file provides helper to implement an ivshmem client. It is used
@@ -19,6 +19,7 @@
  * purposes.
  */
 
+#include <limits.h>
 #include <sys/select.h>
 
 #include "qemu/queue.h"
@@ -209,4 +210,4 @@ ivshmem_client_search_peer(IvshmemClient *client, int64_t peer_id);
  */
 void ivshmem_client_dump(const IvshmemClient *client);
 
-#endif /* IVSHMEM_CLIENT_H */
+#endif /* _IVSHMEM_CLIENT_H_ */

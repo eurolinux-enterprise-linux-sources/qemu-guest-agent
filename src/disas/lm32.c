@@ -18,7 +18,7 @@
  *
  */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
 #include "disas/bfd.h"
 
 typedef enum {

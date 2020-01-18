@@ -22,16 +22,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #ifndef HW_SERIAL_H
-#define HW_SERIAL_H
+#define HW_SERIAL_H 1
 
 #include "hw/hw.h"
 #include "sysemu/sysemu.h"
-#include "chardev/char-fe.h"
 #include "exec/memory.h"
 #include "qemu/fifo8.h"
-#include "chardev/char.h"
 
 #define UART_FIFO_LENGTH    16      /* 16550A Fifo Length */
 
@@ -54,12 +51,11 @@ struct SerialState {
        it can be reset while reading iir */
     int thr_ipending;
     qemu_irq irq;
-    CharBackend chr;
+    CharDriverState *chr;
     int last_break_enable;
     int it_shift;
     int baudbase;
-    uint32_t tsr_retry;
-    guint watch_tag;
+    int tsr_retry;
     uint32_t wakeup;
 
     /* Time when the last byte was successfully sent out of the tsr */
@@ -88,14 +84,14 @@ void serial_set_frequency(SerialState *s, uint32_t frequency);
 
 /* legacy pre qom */
 SerialState *serial_init(int base, qemu_irq irq, int baudbase,
-                         Chardev *chr, MemoryRegion *system_io);
+                         CharDriverState *chr, MemoryRegion *system_io);
 SerialState *serial_mm_init(MemoryRegion *address_space,
                             hwaddr base, int it_shift,
                             qemu_irq irq, int baudbase,
-                            Chardev *chr, enum device_endian end);
+                            CharDriverState *chr, enum device_endian end);
 
 /* serial-isa.c */
 #define TYPE_ISA_SERIAL "isa-serial"
-void serial_hds_isa_init(ISABus *bus, int from, int to);
+void serial_hds_isa_init(ISABus *bus, int n);
 
 #endif

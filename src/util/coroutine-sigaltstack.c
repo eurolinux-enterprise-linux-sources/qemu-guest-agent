@@ -25,17 +25,19 @@
 #ifdef _FORTIFY_SOURCE
 #undef _FORTIFY_SOURCE
 #endif
-#include "qemu/osdep.h"
+#include <stdlib.h>
+#include <setjmp.h>
+#include <stdint.h>
 #include <pthread.h>
+#include <signal.h>
 #include "qemu-common.h"
 #include "qemu/coroutine_int.h"
 
 typedef struct {
     Coroutine base;
     void *stack;
-    size_t stack_size;
     sigjmp_buf env;
-} CoroutineSigAltStack;
+} CoroutineUContext;
 
 /**
  * Per-thread coroutine bookkeeping
@@ -45,7 +47,7 @@ typedef struct {
     Coroutine *current;
 
     /** The default coroutine */
-    CoroutineSigAltStack leader;
+    CoroutineUContext leader;
 
     /** Information for the signal handler (trampoline) */
     sigjmp_buf tr_reenter;
@@ -90,7 +92,7 @@ static void __attribute__((constructor)) coroutine_init(void)
  * (from the signal handler when it is not signal handling, read ahead
  * for more information).
  */
-static void coroutine_bootstrap(CoroutineSigAltStack *self, Coroutine *co)
+static void coroutine_bootstrap(CoroutineUContext *self, Coroutine *co)
 {
     /* Initialize longjmp environment and switch back the caller */
     if (!sigsetjmp(self->env, 0)) {
@@ -110,7 +112,7 @@ static void coroutine_bootstrap(CoroutineSigAltStack *self, Coroutine *co)
  */
 static void coroutine_trampoline(int signal)
 {
-    CoroutineSigAltStack *self;
+    CoroutineUContext *self;
     Coroutine *co;
     CoroutineThreadState *coTS;
 
@@ -144,7 +146,8 @@ static void coroutine_trampoline(int signal)
 
 Coroutine *qemu_coroutine_new(void)
 {
-    CoroutineSigAltStack *co;
+    const size_t stack_size = 1 << 20;
+    CoroutineUContext *co;
     CoroutineThreadState *coTS;
     struct sigaction sa;
     struct sigaction osa;
@@ -164,8 +167,7 @@ Coroutine *qemu_coroutine_new(void)
      */
 
     co = g_malloc0(sizeof(*co));
-    co->stack_size = COROUTINE_STACK_SIZE;
-    co->stack = qemu_alloc_stack(&co->stack_size);
+    co->stack = g_malloc(stack_size);
     co->base.entry_arg = &old_env; /* stash away our jmp_buf */
 
     coTS = coroutine_get_thread_state();
@@ -190,7 +192,7 @@ Coroutine *qemu_coroutine_new(void)
      * Set the new stack.
      */
     ss.ss_sp = co->stack;
-    ss.ss_size = co->stack_size;
+    ss.ss_size = stack_size;
     ss.ss_flags = 0;
     if (sigaltstack(&ss, &oss) < 0) {
         abort();
@@ -252,17 +254,17 @@ Coroutine *qemu_coroutine_new(void)
 
 void qemu_coroutine_delete(Coroutine *co_)
 {
-    CoroutineSigAltStack *co = DO_UPCAST(CoroutineSigAltStack, base, co_);
+    CoroutineUContext *co = DO_UPCAST(CoroutineUContext, base, co_);
 
-    qemu_free_stack(co->stack, co->stack_size);
+    g_free(co->stack);
     g_free(co);
 }
 
 CoroutineAction qemu_coroutine_switch(Coroutine *from_, Coroutine *to_,
                                       CoroutineAction action)
 {
-    CoroutineSigAltStack *from = DO_UPCAST(CoroutineSigAltStack, base, from_);
-    CoroutineSigAltStack *to = DO_UPCAST(CoroutineSigAltStack, base, to_);
+    CoroutineUContext *from = DO_UPCAST(CoroutineUContext, base, from_);
+    CoroutineUContext *to = DO_UPCAST(CoroutineUContext, base, to_);
     CoroutineThreadState *s = coroutine_get_thread_state();
     int ret;
 

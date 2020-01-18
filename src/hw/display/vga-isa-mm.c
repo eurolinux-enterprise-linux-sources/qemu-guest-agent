@@ -21,11 +21,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "hw/hw.h"
-#include "hw/display/vga.h"
+#include "ui/console.h"
+#include "hw/i386/pc.h"
 #include "vga_int.h"
 #include "ui/pixel_ops.h"
+#include "qemu/timer.h"
 
 #define VGA_RAM_SIZE (8192 * 1024)
 

@@ -19,7 +19,6 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pcie_host.h"
@@ -81,7 +80,7 @@ static uint64_t pcie_mmcfg_data_read(void *opaque,
 static const MemoryRegionOps pcie_mmcfg_ops = {
     .read = pcie_mmcfg_data_read,
     .write = pcie_mmcfg_data_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
+    .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
 static void pcie_host_init(Object *obj)

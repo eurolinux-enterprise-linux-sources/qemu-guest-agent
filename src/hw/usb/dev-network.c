@@ -23,8 +23,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu-common.h"
 #include "hw/usb.h"
 #include "hw/usb/desc.h"
@@ -34,7 +32,6 @@
 #include "qemu/config-file.h"
 #include "sysemu/sysemu.h"
 #include "qemu/iov.h"
-#include "qemu/cutils.h"
 
 /*#define TRAFFIC_DEBUG*/
 /* Thanks to NetChip Technologies for donating this product ID.
@@ -656,8 +653,7 @@ typedef struct USBNetState {
 
 static int is_rndis(USBNetState *s)
 {
-    return s->dev.config ?
-            s->dev.config->bConfigurationValue == DEV_RNDIS_CONFIG_VALUE : 0;
+    return s->dev.config->bConfigurationValue == DEV_RNDIS_CONFIG_VALUE;
 }
 
 static int ndis_query(USBNetState *s, uint32_t oid,
@@ -670,49 +666,48 @@ static int ndis_query(USBNetState *s, uint32_t oid,
     /* general oids (table 4-1) */
     /* mandatory */
     case OID_GEN_SUPPORTED_LIST:
-        for (i = 0; i < ARRAY_SIZE(oid_supported_list); i++) {
-            stl_le_p(outbuf + (i * sizeof(le32)), oid_supported_list[i]);
-        }
+        for (i = 0; i < ARRAY_SIZE(oid_supported_list); i++)
+            ((le32 *) outbuf)[i] = cpu_to_le32(oid_supported_list[i]);
         return sizeof(oid_supported_list);
 
     /* mandatory */
     case OID_GEN_HARDWARE_STATUS:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_MEDIA_SUPPORTED:
-        stl_le_p(outbuf, s->medium);
+        *((le32 *) outbuf) = cpu_to_le32(s->medium);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_MEDIA_IN_USE:
-        stl_le_p(outbuf, s->medium);
+        *((le32 *) outbuf) = cpu_to_le32(s->medium);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_MAXIMUM_FRAME_SIZE:
-        stl_le_p(outbuf, ETH_FRAME_LEN);
+        *((le32 *) outbuf) = cpu_to_le32(ETH_FRAME_LEN);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_LINK_SPEED:
-        stl_le_p(outbuf, s->speed);
+        *((le32 *) outbuf) = cpu_to_le32(s->speed);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_TRANSMIT_BLOCK_SIZE:
-        stl_le_p(outbuf, ETH_FRAME_LEN);
+        *((le32 *) outbuf) = cpu_to_le32(ETH_FRAME_LEN);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_RECEIVE_BLOCK_SIZE:
-        stl_le_p(outbuf, ETH_FRAME_LEN);
+        *((le32 *) outbuf) = cpu_to_le32(ETH_FRAME_LEN);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_VENDOR_ID:
-        stl_le_p(outbuf, s->vendorid);
+        *((le32 *) outbuf) = cpu_to_le32(s->vendorid);
         return sizeof(le32);
 
     /* mandatory */
@@ -721,57 +716,58 @@ static int ndis_query(USBNetState *s, uint32_t oid,
         return strlen((char *)outbuf) + 1;
 
     case OID_GEN_VENDOR_DRIVER_VERSION:
-        stl_le_p(outbuf, 1);
+        *((le32 *) outbuf) = cpu_to_le32(1);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_CURRENT_PACKET_FILTER:
-        stl_le_p(outbuf, s->filter);
+        *((le32 *) outbuf) = cpu_to_le32(s->filter);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_MAXIMUM_TOTAL_SIZE:
-        stl_le_p(outbuf, RNDIS_MAX_TOTAL_SIZE);
+        *((le32 *) outbuf) = cpu_to_le32(RNDIS_MAX_TOTAL_SIZE);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_MEDIA_CONNECT_STATUS:
-        stl_le_p(outbuf, s->media_state);
+        *((le32 *) outbuf) = cpu_to_le32(s->media_state);
         return sizeof(le32);
 
     case OID_GEN_PHYSICAL_MEDIUM:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     case OID_GEN_MAC_OPTIONS:
-        stl_le_p(outbuf, NDIS_MAC_OPTION_RECEIVE_SERIALIZED |
-                 NDIS_MAC_OPTION_FULL_DUPLEX);
+        *((le32 *) outbuf) = cpu_to_le32(
+                        NDIS_MAC_OPTION_RECEIVE_SERIALIZED |
+                        NDIS_MAC_OPTION_FULL_DUPLEX);
         return sizeof(le32);
 
     /* statistics OIDs (table 4-2) */
     /* mandatory */
     case OID_GEN_XMIT_OK:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_RCV_OK:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_XMIT_ERROR:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_RCV_ERROR:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_GEN_RCV_NO_BUFFER:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* ieee802.3 OIDs (table 4-3) */
@@ -787,12 +783,12 @@ static int ndis_query(USBNetState *s, uint32_t oid,
 
     /* mandatory */
     case OID_802_3_MULTICAST_LIST:
-        stl_le_p(outbuf, 0xe0000000);
+        *((le32 *) outbuf) = cpu_to_le32(0xe0000000);
         return sizeof(le32);
 
     /* mandatory */
     case OID_802_3_MAXIMUM_LIST_SIZE:
-        stl_le_p(outbuf, 1);
+        *((le32 *) outbuf) = cpu_to_le32(1);
         return sizeof(le32);
 
     case OID_802_3_MAC_OPTIONS:
@@ -801,17 +797,17 @@ static int ndis_query(USBNetState *s, uint32_t oid,
     /* ieee802.3 statistics OIDs (table 4-4) */
     /* mandatory */
     case OID_802_3_RCV_ERROR_ALIGNMENT:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_802_3_XMIT_ONE_COLLISION:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     /* mandatory */
     case OID_802_3_XMIT_MORE_COLLISIONS:
-        stl_le_p(outbuf, 0);
+        *((le32 *) outbuf) = cpu_to_le32(0);
         return sizeof(le32);
 
     default:
@@ -826,7 +822,7 @@ static int ndis_set(USBNetState *s, uint32_t oid,
 {
     switch (oid) {
     case OID_GEN_CURRENT_PACKET_FILTER:
-        s->filter = ldl_le_p(inbuf);
+        s->filter = le32_to_cpup((le32 *) inbuf);
         if (s->filter) {
             s->rndis_state = RNDIS_DATA_INITIALIZED;
         } else {
@@ -918,9 +914,8 @@ static int rndis_query_response(USBNetState *s,
 
     bufoffs = le32_to_cpu(buf->InformationBufferOffset) + 8;
     buflen = le32_to_cpu(buf->InformationBufferLength);
-    if (buflen > length || bufoffs >= length || bufoffs + buflen > length) {
+    if (bufoffs + buflen > length)
         return USB_RET_STALL;
-    }
 
     infobuflen = ndis_query(s, le32_to_cpu(buf->OID),
                             bufoffs + (uint8_t *) buf, buflen, infobuf,
@@ -965,9 +960,8 @@ static int rndis_set_response(USBNetState *s,
 
     bufoffs = le32_to_cpu(buf->InformationBufferOffset) + 8;
     buflen = le32_to_cpu(buf->InformationBufferLength);
-    if (buflen > length || bufoffs >= length || bufoffs + buflen > length) {
+    if (bufoffs + buflen > length)
         return USB_RET_STALL;
-    }
 
     ret = ndis_set(s, le32_to_cpu(buf->OID),
                     bufoffs + (uint8_t *) buf, buflen);
@@ -1026,7 +1020,10 @@ static void usb_net_reset_in_buf(USBNetState *s)
 
 static int rndis_parse(USBNetState *s, uint8_t *data, int length)
 {
-    uint32_t msg_type = ldl_le_p(data);
+    uint32_t msg_type;
+    le32 *tmp = (le32 *) data;
+
+    msg_type = le32_to_cpup(tmp);
 
     switch (msg_type) {
     case RNDIS_INITIALIZE_MSG:
@@ -1214,9 +1211,8 @@ static void usb_net_handle_dataout(USBNetState *s, USBPacket *p)
     if (le32_to_cpu(msg->MessageType) == RNDIS_PACKET_MSG) {
         uint32_t offs = 8 + le32_to_cpu(msg->DataOffset);
         uint32_t size = le32_to_cpu(msg->DataLength);
-        if (offs < len && size < len && offs + size <= len) {
+        if (offs + size <= len)
             qemu_send_packet(qemu_get_queue(s->nic), s->out_buf + offs, size);
-        }
     }
     s->out_ptr -= len;
     memmove(s->out_buf, &s->out_buf[len], s->out_ptr);
@@ -1324,7 +1320,7 @@ static void usbnet_cleanup(NetClientState *nc)
     s->nic = NULL;
 }
 
-static void usb_net_unrealize(USBDevice *dev, Error **errp)
+static void usb_net_handle_destroy(USBDevice *dev)
 {
     USBNetState *s = (USBNetState *) dev;
 
@@ -1334,7 +1330,7 @@ static void usb_net_unrealize(USBDevice *dev, Error **errp)
 }
 
 static NetClientInfo net_usbnet_info = {
-    .type = NET_CLIENT_DRIVER_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .receive = usbnet_receive,
     .cleanup = usbnet_cleanup,
@@ -1382,6 +1378,31 @@ static void usb_net_instance_init(Object *obj)
                                   &dev->qdev, NULL);
 }
 
+static USBDevice *usb_net_init(USBBus *bus, const char *cmdline)
+{
+    Error *local_err = NULL;
+    USBDevice *dev;
+    QemuOpts *opts;
+    int idx;
+
+    opts = qemu_opts_parse_noisily(qemu_find_opts("net"), cmdline, false);
+    if (!opts) {
+        return NULL;
+    }
+    qemu_opt_set(opts, "type", "nic", &error_abort);
+    qemu_opt_set(opts, "model", "usb", &error_abort);
+
+    idx = net_client_init(opts, 0, &local_err);
+    if (local_err) {
+        error_report_err(local_err);
+        return NULL;
+    }
+
+    dev = usb_create(bus, "usb-net");
+    qdev_set_nic_properties(&dev->qdev, &nd_table[idx]);
+    return dev;
+}
+
 static const VMStateDescription vmstate_usb_net = {
     .name = "usb-net",
     .unmigratable = 1,
@@ -1403,7 +1424,7 @@ static void usb_net_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_net_handle_reset;
     uc->handle_control = usb_net_handle_control;
     uc->handle_data    = usb_net_handle_data;
-    uc->unrealize      = usb_net_unrealize;
+    uc->handle_destroy = usb_net_handle_destroy;
     set_bit(DEVICE_CATEGORY_NETWORK, dc->categories);
     dc->fw_name = "network";
     dc->vmsd = &vmstate_usb_net;
@@ -1421,6 +1442,7 @@ static const TypeInfo net_info = {
 static void usb_net_register_types(void)
 {
     type_register_static(&net_info);
+    usb_legacy_register(TYPE_USB_NET, "net", usb_net_init);
 }
 
 type_init(usb_net_register_types)

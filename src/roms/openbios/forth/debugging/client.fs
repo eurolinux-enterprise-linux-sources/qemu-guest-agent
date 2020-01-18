@@ -1,11 +1,5 @@
 \ 7.6 Client Program Debugging command group
 
-\ Saved program state context
-variable __context
-0 __context !
-
-: saved-context __context @ @ ;
-
 
 \ 7.6.1    Registers display
 
@@ -23,13 +17,12 @@ variable __context
 
 \ 7.6.2    Program download and execute
 
-struct ( load-state )
-  /n field >ls.entry
-  /n field >ls.file-size
-  /n field >ls.file-type
-  /n field >ls.param
-constant load-state.size
-create load-state load-state.size allot
+struct ( saved-program-state )
+  /n field >sps.entry
+  /n field >sps.file-size
+  /n field >sps.file-type
+constant saved-program-state.size
+create saved-program-state saved-program-state.size allot
 
 variable state-valid
 0 state-valid !
@@ -41,7 +34,8 @@ variable file-size
 : load-size file-size @ ;
 
 
-\ File types identified by (load-state)
+\ File types identified by (init-program)
+
 0  constant elf-boot
 1  constant elf
 2  constant bootinfo
@@ -210,22 +204,18 @@ variable file-size
 ;
 
 : go    ( -- )
-  state-valid @ 0= if
+  state-valid @ not if
     s" No valid state has been set by load or init-program" type cr
     exit 
   then
 
-  \ Call any architecture-specific code
-  s" (arch-go)" $find if
-    execute
-  else
-    2drop
-  then  
-
-  \ go
+  \ Call the architecture-specific code to launch the client image
   s" (go)" $find if
     execute
-  then  
+  else
+    ." go is not yet implemented"
+    2drop
+  then
   ;
 
 

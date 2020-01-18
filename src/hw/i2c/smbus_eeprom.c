@@ -22,7 +22,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/i2c/i2c.h"
 #include "hw/i2c/smbus.h"
@@ -123,7 +122,7 @@ static void smbus_eeprom_class_initfn(ObjectClass *klass, void *data)
     sc->read_data = eeprom_read_data;
     dc->props = smbus_eeprom_properties;
     /* Reason: pointer property "data" */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo smbus_eeprom_info = {

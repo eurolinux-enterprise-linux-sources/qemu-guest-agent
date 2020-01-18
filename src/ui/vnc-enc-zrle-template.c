@@ -22,7 +22,7 @@
  */
 
 
-#include "qemu/osdep.h"
+#include <assert.h>
 
 #undef ZRLE_ENDIAN_SUFFIX
 

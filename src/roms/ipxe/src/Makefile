@@ -9,7 +9,6 @@ ASFLAGS		:=
 LDFLAGS		:=
 HOST_CFLAGS	:=
 MAKEDEPS	:= Makefile
-CROSS_COMPILE	?= $(CROSS)
 
 ###############################################################################
 #
@@ -53,7 +52,9 @@ EINFO		:= ./util/einfo
 GENKEYMAP	:= ./util/genkeymap.pl
 DOXYGEN		:= doxygen
 LCAB		:= lcab
-QEMUIMG		:= qemu-img
+BINUTILS_DIR	:= /usr
+BFD_DIR		:= $(BINUTILS_DIR)
+ZLIB_DIR	:= /usr
 
 ###############################################################################
 #
@@ -78,20 +79,10 @@ SRCDIRS		+= drivers/net/ath/ath9k
 SRCDIRS		+= drivers/net/vxge
 SRCDIRS		+= drivers/net/efi
 SRCDIRS		+= drivers/net/tg3
-SRCDIRS		+= drivers/net/sfc
 SRCDIRS		+= drivers/block
 SRCDIRS		+= drivers/nvs
 SRCDIRS		+= drivers/bitbash
 SRCDIRS		+= drivers/infiniband
-SRCDIRS		+= drivers/infiniband/mlx_utils_flexboot/src
-SRCDIRS		+= drivers/infiniband/mlx_utils/src/public
-SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_reg_access
-SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_nvconfig
-SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_vmac
-SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_blink_leds
-SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_link_speed
-SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_mtu
-SRCDIRS		+= drivers/infiniband/mlx_nodnic/src
 SRCDIRS		+= drivers/usb
 SRCDIRS		+= interface/pxe interface/efi interface/smbios
 SRCDIRS		+= interface/bofm
@@ -160,9 +151,6 @@ all : $(ALL)
 everything :
 	$(Q)$(MAKE) --no-print-directory $(ALL) \
 		bin/3c509.rom bin/intel.rom bin/intel.mrom \
-		bin-x86_64-pcbios/8086100e.mrom bin-x86_64-pcbios/intel.rom \
-		bin-x86_64-pcbios/ipxe.usb bin-x86_64-pcbios/ipxe.pxe \
-		bin-x86_64-pcbios/undionly.kpxe \
 		bin-i386-efi/ipxe.efi bin-i386-efi/ipxe.efidrv \
 		bin-i386-efi/ipxe.efirom \
 		bin-x86_64-efi/ipxe.efi bin-x86_64-efi/ipxe.efidrv \

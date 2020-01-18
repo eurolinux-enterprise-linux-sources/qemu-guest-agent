@@ -39,7 +39,8 @@
 /*								      */
 /* Error handling is the same as decNumber (qv.).		      */
 /* ------------------------------------------------------------------ */
-#include "qemu/osdep.h"
+#include <string.h>	      /* [for memset/memcpy] */
+#include <stdio.h>	      /* [for printf] */
 
 #include "libdecnumber/dconfig.h"
 #define	 DECNUMDIGITS 34      /* make decNumbers with space for 34 */

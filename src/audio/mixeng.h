@@ -21,7 +21,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
 #ifndef QEMU_MIXENG_H
 #define QEMU_MIXENG_H
 
@@ -49,4 +48,4 @@ void st_rate_stop (void *opaque);
 void mixeng_clear (struct st_sample *buf, int len);
 void mixeng_volume (struct st_sample *buf, int len, struct mixeng_volume *vol);
 
-#endif /* QEMU_MIXENG_H */
+#endif  /* mixeng.h */

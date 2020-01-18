@@ -17,10 +17,9 @@
 #include "fw/paravirt.h" // runningOnQEMU
 #include "malloc.h" // free
 #include "output.h" // dprintf
-#include "pcidevice.h" // foreachpci
+#include "pci.h" // foreachpci
 #include "pci_ids.h" // PCI_DEVICE_ID_VIRTIO_BLK
 #include "pci_regs.h" // PCI_VENDOR_ID
-#include "stacks.h" // run_thread
 #include "std/disk.h" // DISK_RET_SUCCESS
 #include "string.h" // memset
 #include "util.h" // usleep
@@ -51,21 +50,12 @@ struct lsi_lun_s {
     u8 lun;
 };
 
-int
-lsi_scsi_process_op(struct disk_op_s *op)
+static int
+lsi_scsi_cmd(struct lsi_lun_s *llun_gf, struct disk_op_s *op,
+             void *cdbcmd, u16 target, u16 lun, u16 blocksize)
 {
-    if (!CONFIG_LSI_SCSI)
-        return DISK_RET_EBADTRACK;
-    struct lsi_lun_s *llun_gf =
-        container_of(op->drive_fl, struct lsi_lun_s, drive);
-    u16 target = GET_GLOBALFLAT(llun_gf->target);
-    u16 lun = GET_GLOBALFLAT(llun_gf->lun);
-    u8 cdbcmd[16];
-    int blocksize = scsi_fill_cmd(op, cdbcmd, sizeof(cdbcmd));
-    if (blocksize < 0)
-        return default_process_op(op);
     u32 iobase = GET_GLOBALFLAT(llun_gf->iobase);
-    u32 dma = ((scsi_is_read(op) ? 0x01000000 : 0x00000000) |
+    u32 dma = ((cdb_is_read(cdbcmd, blocksize) ? 0x01000000 : 0x00000000) |
                (op->count * blocksize));
     u8 msgout[] = {
         0x80 | lun,                 // select lun
@@ -132,10 +122,29 @@ fail:
     return DISK_RET_EBADTRACK;
 }
 
-static void
-lsi_scsi_init_lun(struct lsi_lun_s *llun, struct pci_device *pci, u32 iobase,
-                  u8 target, u8 lun)
+int
+lsi_scsi_cmd_data(struct disk_op_s *op, void *cdbcmd, u16 blocksize)
 {
+    if (!CONFIG_LSI_SCSI)
+        return DISK_RET_EBADTRACK;
+
+    struct lsi_lun_s *llun_gf =
+        container_of(op->drive_gf, struct lsi_lun_s, drive);
+
+    return lsi_scsi_cmd(llun_gf, op, cdbcmd,
+                        GET_GLOBALFLAT(llun_gf->target),
+                        GET_GLOBALFLAT(llun_gf->lun),
+                        blocksize);
+}
+
+static int
+lsi_scsi_add_lun(struct pci_device *pci, u32 iobase, u8 target, u8 lun)
+{
+    struct lsi_lun_s *llun = malloc_fseg(sizeof(*llun));
+    if (!llun) {
+        warn_noalloc();
+        return -1;
+    }
     memset(llun, 0, sizeof(*llun));
     llun->drive.type = DTYPE_LSI_SCSI;
     llun->drive.cntl_id = pci->bdf;
@@ -143,24 +152,11 @@ lsi_scsi_init_lun(struct lsi_lun_s *llun, struct pci_device *pci, u32 iobase,
     llun->target = target;
     llun->lun = lun;
     llun->iobase = iobase;
-}
 
-static int
-lsi_scsi_add_lun(u32 lun, struct drive_s *tmpl_drv)
-{
-    struct lsi_lun_s *tmpl_llun =
-        container_of(tmpl_drv, struct lsi_lun_s, drive);
-    struct lsi_lun_s *llun = malloc_fseg(sizeof(*llun));
-    if (!llun) {
-        warn_noalloc();
-        return -1;
-    }
-    lsi_scsi_init_lun(llun, tmpl_llun->pci, tmpl_llun->iobase,
-                      tmpl_llun->target, lun);
-
-    char *name = znprintf(MAXDESCSIZE, "lsi %pP %d:%d",
-                          llun->pci, llun->target, llun->lun);
-    int prio = bootprio_find_scsi_device(llun->pci, llun->target, llun->lun);
+    char *name = znprintf(16, "lsi %02x:%02x.%x %d:%d",
+                          pci_bdf_to_bus(pci->bdf), pci_bdf_to_dev(pci->bdf),
+                          pci_bdf_to_fn(pci->bdf), target, lun);
+    int prio = bootprio_find_scsi_device(pci, target, lun);
     int ret = scsi_drive_setup(&llun->drive, name, prio);
     free(name);
     if (ret)
@@ -175,24 +171,22 @@ fail:
 static void
 lsi_scsi_scan_target(struct pci_device *pci, u32 iobase, u8 target)
 {
-    struct lsi_lun_s llun0;
-
-    lsi_scsi_init_lun(&llun0, pci, iobase, target, 0);
-
-    if (scsi_rep_luns_scan(&llun0.drive, lsi_scsi_add_lun) < 0)
-        scsi_sequential_scan(&llun0.drive, 8, lsi_scsi_add_lun);
+    /* TODO: send REPORT LUNS.  For now, only LUN 0 is recognized.  */
+    lsi_scsi_add_lun(pci, iobase, target, 0);
 }
 
 static void
-init_lsi_scsi(void *data)
+init_lsi_scsi(struct pci_device *pci)
 {
-    struct pci_device *pci = data;
-    u32 iobase = pci_enable_iobar(pci, PCI_BASE_ADDRESS_0);
-    if (!iobase)
-        return;
-    pci_enable_busmaster(pci);
+    u16 bdf = pci->bdf;
+    u32 iobase = pci_config_readl(pci->bdf, PCI_BASE_ADDRESS_0)
+        & PCI_BASE_ADDRESS_IO_MASK;
 
-    dprintf(1, "found lsi53c895a at %pP, io @ %x\n", pci, iobase);
+    pci_config_maskw(bdf, PCI_COMMAND, 0, PCI_COMMAND_MASTER);
+
+    dprintf(1, "found lsi53c895a at %02x:%02x.%x, io @ %x\n",
+            pci_bdf_to_bus(bdf), pci_bdf_to_dev(bdf),
+            pci_bdf_to_fn(bdf), iobase);
 
     // reset
     outb(LSI_ISTAT0_SRST, iobase + LSI_REG_ISTAT0);
@@ -200,6 +194,8 @@ init_lsi_scsi(void *data)
     int i;
     for (i = 0; i < 7; i++)
         lsi_scsi_scan_target(pci, iobase, i);
+
+    return;
 }
 
 void
@@ -216,6 +212,6 @@ lsi_scsi_setup(void)
         if (pci->vendor != PCI_VENDOR_ID_LSI_LOGIC
             || pci->device != PCI_DEVICE_ID_LSI_53C895A)
             continue;
-        run_thread(init_lsi_scsi, pci);
+        init_lsi_scsi(pci);
     }
 }

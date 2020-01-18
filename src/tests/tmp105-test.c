@@ -7,11 +7,10 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <glib.h>
 
 #include "libqtest.h"
 #include "libqos/i2c.h"
-#include "qapi/qmp/qdict.h"
 #include "hw/misc/tmp105_regs.h"
 
 #define OMAP2_I2C_1_BASE 0x48070000
@@ -155,13 +154,15 @@ int main(int argc, char **argv)
     s = qtest_start("-machine n800 "
                     "-device tmp105,bus=i2c-bus.0,id=" TMP105_TEST_ID
                     ",address=0x49");
-    i2c = omap_i2c_create(s, OMAP2_I2C_1_BASE);
+    i2c = omap_i2c_create(OMAP2_I2C_1_BASE);
 
     qtest_add_func("/tmp105/tx-rx", send_and_receive);
 
     ret = g_test_run();
 
-    qtest_quit(s);
+    if (s) {
+        qtest_quit(s);
+    }
     g_free(i2c);
 
     return ret;

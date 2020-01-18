@@ -17,7 +17,6 @@
  * 02110-1301, USA.
  */
 
-#define FILE_LICENCE(...) extern void __file_licence ( void )
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -28,7 +27,7 @@
 #include <errno.h>
 #include <assert.h>
 #include <getopt.h>
-#include <ipxe/efi/Uefi.h>
+#include <ipxe/efi/efi.h>
 #include <ipxe/efi/IndustryStandard/PeImage.h>
 
 #define eprintf(...) fprintf ( stderr, __VA_ARGS__ )

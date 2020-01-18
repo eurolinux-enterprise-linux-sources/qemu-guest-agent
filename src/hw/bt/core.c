@@ -17,8 +17,6 @@
  * with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
-#include "qemu/error-report.h"
 #include "qemu-common.h"
 #include "sysemu/bt.h"
 #include "hw/bt.h"
@@ -32,22 +30,24 @@ static void bt_dummy_lmp_mode_change(struct bt_link_s *link)
 static void bt_dummy_lmp_connection_complete(struct bt_link_s *link)
 {
     if (link->slave->reject_reason)
-        error_report("%s: stray LMP_not_accepted received, fixme", __func__);
+        fprintf(stderr, "%s: stray LMP_not_accepted received, fixme\n",
+                        __FUNCTION__);
     else
-        error_report("%s: stray LMP_accepted received, fixme", __func__);
+        fprintf(stderr, "%s: stray LMP_accepted received, fixme\n",
+                        __FUNCTION__);
     exit(-1);
 }
 
 static void bt_dummy_lmp_disconnect_master(struct bt_link_s *link)
 {
-    error_report("%s: stray LMP_detach received, fixme", __func__);
+    fprintf(stderr, "%s: stray LMP_detach received, fixme\n", __FUNCTION__);
     exit(-1);
 }
 
 static void bt_dummy_lmp_acl_resp(struct bt_link_s *link,
                 const uint8_t *data, int start, int len)
 {
-    error_report("%s: stray ACL response PDU, fixme", __func__);
+    fprintf(stderr, "%s: stray ACL response PDU, fixme\n", __FUNCTION__);
     exit(-1);
 }
 
@@ -112,8 +112,8 @@ void bt_device_done(struct bt_device_s *dev)
     while (*p && *p != dev)
         p = &(*p)->next;
     if (*p != dev) {
-        error_report("%s: bad bt device \"%s\"", __func__,
-                     dev->lmp_name ?: "(null)");
+        fprintf(stderr, "%s: bad bt device \"%s\"\n", __FUNCTION__,
+                        dev->lmp_name ?: "(null)");
         exit(-1);
     }
 

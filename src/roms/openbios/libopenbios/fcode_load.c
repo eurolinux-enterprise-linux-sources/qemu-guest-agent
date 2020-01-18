@@ -6,7 +6,6 @@
 #include "kernel/kernel.h"
 #include "libopenbios/bindings.h"
 #include "libopenbios/fcode_load.h"
-#include "libopenbios/initprogram.h"
 #include "libopenbios/sys_info.h"
 #include "libc/diskio.h"
 #define printf printk
@@ -76,10 +75,14 @@ fcode_load(ihandle_t dev)
     debug("Loaded %lu bytes\n", size);
     debug("entry point is %#lx\n", start);
     
-    // Initialise load-state
+    // Initialise saved-program-state
+    PUSH(start);
+    feval("saved-program-state >sps.entry !");
     PUSH(size);
-    feval("load-state >ls.file-size !");
-    feval("fcode load-state >ls.file-type !");
+    feval("saved-program-state >sps.file-size !");
+    feval("fcode saved-program-state >sps.file-type !");
+
+    feval("-1 state-valid !");
 
 out:
     close_io(fd);
@@ -89,11 +92,18 @@ out:
 void 
 fcode_init_program(void)
 {
-    /* Use trampoline context to execute FCode */
-    PUSH((ucell)&init_fcode_context);
-    feval("load-state >ls.entry !");
-    
-    arch_init_program();
-    
-    feval("-1 state-valid !");
+	/* If the payload is Fcode then we execute it immediately */
+	ucell address;
+
+	fword("load-base");
+	address = POP();
+
+	if (!is_fcode((unsigned char *)address)) {
+		debug("Not a valid Fcode memory image\n");
+		return;
+	}
+
+	PUSH(address);
+	PUSH(1);
+	fword("byte-load");
 }

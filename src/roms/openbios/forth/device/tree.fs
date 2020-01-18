@@ -35,7 +35,7 @@ new-device
   1 encode-int " boot-syntax" property
   
   : selftest
-    ." OpenBIOS selftest... succeeded" cr
+    ." OpenBIOS selftest... succeded" cr
     true
   ;
   : open true ;

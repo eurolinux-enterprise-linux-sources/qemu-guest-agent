@@ -14,7 +14,6 @@
  * GNU General Public License for more details.
  */
 
-#include "qemu/osdep.h"
 #include "qemu/iov.h"
 
 #include "rocker.h"
@@ -51,11 +50,13 @@ World *world_alloc(Rocker *r, size_t sizeof_private,
 {
     World *w = g_malloc0(sizeof(World) + sizeof_private);
 
-    w->r = r;
-    w->type = type;
-    w->ops = ops;
-    if (w->ops->init) {
-        w->ops->init(w);
+    if (w) {
+        w->r = r;
+        w->type = type;
+        w->ops = ops;
+        if (w->ops->init) {
+            w->ops->init(w);
+        }
     }
 
     return w;
@@ -96,5 +97,10 @@ enum rocker_world_type world_type(World *world)
 
 const char *world_name(World *world)
 {
-    return world->ops->name;
+    switch (world->type) {
+    case ROCKER_WORLD_TYPE_OF_DPA:
+        return "OF_DPA";
+    default:
+        return "unknown";
+    }
 }

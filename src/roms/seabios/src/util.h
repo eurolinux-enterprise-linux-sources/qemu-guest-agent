@@ -36,7 +36,6 @@ int bootprio_find_pci_rom(struct pci_device *pci, int instance);
 int bootprio_find_named_rom(const char *name, int instance);
 struct usbdevice_s;
 int bootprio_find_usb(struct usbdevice_s *usbdev, int lun);
-int get_keystroke(int msec);
 
 // bootsplash.c
 void enable_vga_console(void);
@@ -44,17 +43,17 @@ void enable_bootsplash(void);
 void disable_bootsplash(void);
 
 // cdrom.c
+extern u8 CDRom_locks[];
 extern struct eltorito_s CDEmu;
 extern struct drive_s *cdemu_drive_gf;
 struct disk_op_s;
-int cdemu_process_op(struct disk_op_s *op);
+int process_cdemu_op(struct disk_op_s *op);
 void cdrom_prepboot(void);
 int cdrom_boot(struct drive_s *drive_g);
 
 // clock.c
 void clock_setup(void);
 void handle_1583(struct bregs *regs);
-void clock_poll_irq(void);
 u32 irqtimer_calc_ticks(u32 count);
 u32 irqtimer_calc(u32 msecs);
 int irqtimer_check(u32 end);
@@ -72,12 +71,10 @@ extern struct rsdp_descriptor *RsdpAddr;
 extern u32 acpi_pm1a_cnt;
 extern u16 acpi_pm_base;
 void *find_acpi_rsdp(void);
-void *find_acpi_table(u32 signature);
 u32 find_resume_vector(void);
 void acpi_reboot(void);
 void find_acpi_features(void);
 extern struct smbios_entry_point *SMBiosAddr;
-struct smbios_entry_point *get_smbios_entry_point();
 void copy_smbios(void *pos);
 void display_uuid(void);
 void copy_table(void *pos);
@@ -107,12 +104,7 @@ void mptable_setup(void);
 // fw/mtrr.c
 void mtrr_setup(void);
 
-// fw/multiboot.c
-void multiboot_init(void);
-
 // fw/pciinit.c
-extern u64 pcimem_start, pcimem_end;
-extern u64 pcimem64_start, pcimem64_end;
 extern const u8 pci_irqs[4];
 void pci_setup(void);
 void pci_resume(void);
@@ -123,7 +115,7 @@ void pirtable_setup(void);
 // fw/shadow.c
 void make_bios_writable(void);
 void make_bios_readonly(void);
-void qemu_reboot(void);
+void qemu_prep_reset(void);
 
 // fw/smbios.c
 void smbios_legacy_setup(void);
@@ -136,7 +128,6 @@ void smm_setup(void);
 extern u32 MaxCountCPUs;
 void wrmsr_smp(u32 index, u64 val);
 void smp_setup(void);
-void smp_resume(void);
 int apic_id_is_present(u8 apic_id);
 
 // hw/dma.c
@@ -148,15 +139,15 @@ extern struct floppy_ext_dbt_s diskette_param_table2;
 void floppy_setup(void);
 struct drive_s *init_floppy(int floppyid, int ftype);
 int find_floppy_type(u32 size);
-int floppy_process_op(struct disk_op_s *op);
+int process_floppy_op(struct disk_op_s *op);
 void floppy_tick(void);
 
 // hw/ramdisk.c
 void ramdisk_setup(void);
-int ramdisk_process_op(struct disk_op_s *op);
+int process_ramdisk_op(struct disk_op_s *op);
 
 // hw/sdcard.c
-int sdcard_process_op(struct disk_op_s *op);
+int process_sdcard_op(struct disk_op_s *op);
 void sdcard_setup(void);
 
 // hw/timer.c
@@ -186,11 +177,8 @@ int jpeg_show(struct jpeg_decdata *jpeg, unsigned char *pic, int width
 void kbd_init(void);
 void handle_15c2(struct bregs *regs);
 void process_key(u8 key);
-u8 enqueue_key(u16 keycode);
-u16 ascii_to_keycode(u8 ascii);
 
 // misc.c
-extern int HaveRunPost;
 extern struct bios_config_table_s BIOS_CONFIG_TABLE __aligned(1);
 extern struct floppy_dbt_s diskette_param_table __aligned(1);
 extern u8 BiosChecksum;
@@ -229,22 +217,21 @@ void device_hardware_setup(void);
 void prepareboot(void);
 void startBoot(void);
 void reloc_preinit(void *f, void *arg);
-void code_mutable_preinit(void);
 
-// sercon.c
-void sercon_setup(void);
-void sercon_check_event(void);
+// resume.c
+extern int HaveRunPost;
 
 // serial.c
 void serial_setup(void);
 void lpt_setup(void);
 
-// version.c
-extern const char VERSION[], BUILDINFO[];
-
 // vgahooks.c
 void handle_155f(struct bregs *regs);
 void handle_157f(struct bregs *regs);
 void vgahook_setup(struct pci_device *pci);
+
+
+// version (auto generated file out/version.c)
+extern const char VERSION[];
 
 #endif // util.h

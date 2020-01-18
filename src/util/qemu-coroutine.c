@@ -12,14 +12,12 @@
  *
  */
 
-#include "qemu/osdep.h"
 #include "trace.h"
 #include "qemu-common.h"
 #include "qemu/thread.h"
 #include "qemu/atomic.h"
 #include "qemu/coroutine.h"
 #include "qemu/coroutine_int.h"
-#include "block/aio.h"
 
 enum {
     POOL_BATCH_SIZE = 64,
@@ -43,7 +41,7 @@ static void coroutine_pool_cleanup(Notifier *n, void *value)
     }
 }
 
-Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
+Coroutine *qemu_coroutine_create(CoroutineEntry *entry)
 {
     Coroutine *co = NULL;
 
@@ -77,8 +75,7 @@ Coroutine *qemu_coroutine_create(CoroutineEntry *entry, void *opaque)
     }
 
     co->entry = entry;
-    co->entry_arg = opaque;
-    QSIMPLEQ_INIT(&co->co_queue_wakeup);
+    QTAILQ_INIT(&co->co_queue_wakeup);
     return co;
 }
 
@@ -102,79 +99,33 @@ static void coroutine_delete(Coroutine *co)
     qemu_coroutine_delete(co);
 }
 
-void qemu_aio_coroutine_enter(AioContext *ctx, Coroutine *co)
+void qemu_coroutine_enter(Coroutine *co, void *opaque)
 {
-    QSIMPLEQ_HEAD(, Coroutine) pending = QSIMPLEQ_HEAD_INITIALIZER(pending);
-    Coroutine *from = qemu_coroutine_self();
+    Coroutine *self = qemu_coroutine_self();
+    CoroutineAction ret;
 
-    QSIMPLEQ_INSERT_TAIL(&pending, co, co_queue_next);
+    trace_qemu_coroutine_enter(self, co, opaque);
 
-    /* Run co and any queued coroutines */
-    while (!QSIMPLEQ_EMPTY(&pending)) {
-        Coroutine *to = QSIMPLEQ_FIRST(&pending);
-        CoroutineAction ret;
-
-        /* Cannot rely on the read barrier for to in aio_co_wake(), as there are
-         * callers outside of aio_co_wake() */
-        const char *scheduled = atomic_mb_read(&to->scheduled);
-
-        QSIMPLEQ_REMOVE_HEAD(&pending, co_queue_next);
-
-        trace_qemu_aio_coroutine_enter(ctx, from, to, to->entry_arg);
-
-        /* if the Coroutine has already been scheduled, entering it again will
-         * cause us to enter it twice, potentially even after the coroutine has
-         * been deleted */
-        if (scheduled) {
-            fprintf(stderr,
-                    "%s: Co-routine was already scheduled in '%s'\n",
-                    __func__, scheduled);
-            abort();
-        }
-
-        if (to->caller) {
-            fprintf(stderr, "Co-routine re-entered recursively\n");
-            abort();
-        }
-
-        to->caller = from;
-        to->ctx = ctx;
-
-        /* Store to->ctx before anything that stores to.  Matches
-         * barrier in aio_co_wake and qemu_co_mutex_wake.
-         */
-        smp_wmb();
-
-        ret = qemu_coroutine_switch(from, to, COROUTINE_ENTER);
-
-        /* Queued coroutines are run depth-first; previously pending coroutines
-         * run after those queued more recently.
-         */
-        QSIMPLEQ_PREPEND(&pending, &to->co_queue_wakeup);
-
-        switch (ret) {
-        case COROUTINE_YIELD:
-            break;
-        case COROUTINE_TERMINATE:
-            assert(!to->locks_held);
-            trace_qemu_coroutine_terminate(to);
-            coroutine_delete(to);
-            break;
-        default:
-            abort();
-        }
+    if (co->caller) {
+        fprintf(stderr, "Co-routine re-entered recursively\n");
+        abort();
     }
-}
 
-void qemu_coroutine_enter(Coroutine *co)
-{
-    qemu_aio_coroutine_enter(qemu_get_current_aio_context(), co);
-}
+    co->caller = self;
+    co->entry_arg = opaque;
+    ret = qemu_coroutine_switch(self, co, COROUTINE_ENTER);
 
-void qemu_coroutine_enter_if_inactive(Coroutine *co)
-{
-    if (!qemu_coroutine_entered(co)) {
-        qemu_coroutine_enter(co);
+    qemu_co_queue_run_restart(co);
+
+    switch (ret) {
+    case COROUTINE_YIELD:
+        return;
+    case COROUTINE_TERMINATE:
+        trace_qemu_coroutine_terminate(co);
+        coroutine_delete(co);
+        return;
+    default:
+        abort();
     }
 }
 
@@ -192,9 +143,4 @@ void coroutine_fn qemu_coroutine_yield(void)
 
     self->caller = NULL;
     qemu_coroutine_switch(self, to, COROUTINE_YIELD);
-}
-
-bool qemu_coroutine_entered(Coroutine *co)
-{
-    return co->caller;
 }

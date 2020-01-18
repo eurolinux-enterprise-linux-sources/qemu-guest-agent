@@ -5,9 +5,8 @@
  * terms and conditions of the copyright.
  */
 
-#include "qemu/osdep.h"
-#include "slirp.h"
-#include "qemu/main-loop.h"
+#include <slirp.h>
+#include <qemu/main-loop.h>
 
 static void sbappendsb(struct sbuf *sb, struct mbuf *m);
 
@@ -91,7 +90,7 @@ sbappend(struct socket *so, struct mbuf *m)
 	if (so->so_urgc) {
 		sbappendsb(&so->so_rcv, m);
 		m_free(m);
-		(void)sosendoob(so);
+		sosendoob(so);
 		return;
 	}
 

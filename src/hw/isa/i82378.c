@@ -17,11 +17,9 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/pci/pci.h"
 #include "hw/i386/pc.h"
 #include "hw/timer/i8254.h"
-#include "hw/timer/mc146818rtc.h"
 #include "hw/audio/pcspk.h"
 
 #define TYPE_I82378 "i82378"
@@ -77,10 +75,7 @@ static void i82378_realize(PCIDevice *pci, Error **errp)
     pci_config_set_interrupt_pin(pci_conf, 1); /* interrupt pin 0 */
 
     isabus = isa_bus_new(dev, get_system_memory(),
-                         pci_address_space_io(pci), errp);
-    if (!isabus) {
-        return;
-    }
+                         pci_address_space_io(pci));
 
     /* This device has:
        2 82C59 (irq)
@@ -98,7 +93,7 @@ static void i82378_realize(PCIDevice *pci, Error **errp)
     isa_bus_irqs(isabus, s->i8259);
 
     /* 1 82C54 (pit) */
-    isa = i8254_pit_init(isabus, 0x40, 0, NULL);
+    isa = pit_init(isabus, 0x40, 0, NULL);
 
     /* speaker */
     pcspk_init(isabus, isa);
@@ -107,7 +102,7 @@ static void i82378_realize(PCIDevice *pci, Error **errp)
     isa = isa_create_simple(isabus, "i82374");
 
     /* timer */
-    isa_create_simple(isabus, TYPE_MC146818_RTC);
+    isa_create_simple(isabus, "mc146818rtc");
 }
 
 static void i82378_init(Object *obj)
@@ -139,10 +134,6 @@ static const TypeInfo i82378_type_info = {
     .instance_size = sizeof(I82378State),
     .instance_init = i82378_init,
     .class_init = i82378_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void i82378_register_types(void)

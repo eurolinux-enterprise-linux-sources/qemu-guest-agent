@@ -22,10 +22,8 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/readline.h"
-#include "qemu/cutils.h"
 
 #define IS_NORM 0
 #define IS_ESC  1
@@ -500,25 +498,12 @@ const char *readline_get_history(ReadLineState *rs, unsigned int index)
     return rs->history[index];
 }
 
-void readline_free(ReadLineState *rs)
-{
-    int i;
-
-    if (!rs) {
-        return;
-    }
-    for (i = 0; i < READLINE_MAX_CMDS; i++) {
-        g_free(rs->history[i]);
-    }
-    g_free(rs);
-}
-
 ReadLineState *readline_init(ReadLinePrintfFunc *printf_func,
                              ReadLineFlushFunc *flush_func,
                              void *opaque,
                              ReadLineCompletionFunc *completion_finder)
 {
-    ReadLineState *rs = g_new0(ReadLineState, 1);
+    ReadLineState *rs = g_malloc0(sizeof(*rs));
 
     rs->hist_entry = -1;
     rs->opaque = opaque;

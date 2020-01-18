@@ -11,8 +11,8 @@
  *
  */
 
-#ifndef QEMU_VIRTIO_BLK_H
-#define QEMU_VIRTIO_BLK_H
+#ifndef _QEMU_VIRTIO_BLK_H
+#define _QEMU_VIRTIO_BLK_H
 
 #include "standard-headers/linux/virtio_blk.h"
 #include "hw/virtio/virtio.h"
@@ -38,8 +38,6 @@ struct VirtIOBlkConf
     uint32_t scsi;
     uint32_t config_wce;
     uint32_t request_merging;
-    uint16_t num_queues;
-    uint16_t queue_size;
 };
 
 struct VirtIOBlockDataPlane;
@@ -48,22 +46,23 @@ struct VirtIOBlockReq;
 typedef struct VirtIOBlock {
     VirtIODevice parent_obj;
     BlockBackend *blk;
+    VirtQueue *vq;
     void *rq;
     QEMUBH *bh;
     VirtIOBlkConf conf;
     unsigned short sector_mask;
     bool original_wce;
     VMChangeStateEntry *change;
-    bool dataplane_disabled;
-    bool dataplane_started;
+    /* Function to push to vq and notify guest */
+    void (*complete_request)(struct VirtIOBlockReq *req, unsigned char status);
+    Notifier migration_state_notifier;
     struct VirtIOBlockDataPlane *dataplane;
 } VirtIOBlock;
 
 typedef struct VirtIOBlockReq {
-    VirtQueueElement elem;
     int64_t sector_num;
     VirtIOBlock *dev;
-    VirtQueue *vq;
+    VirtQueueElement elem;
     struct virtio_blk_inhdr *in;
     struct virtio_blk_outhdr out;
     QEMUIOVector qiov;
@@ -81,6 +80,12 @@ typedef struct MultiReqBuffer {
     bool is_write;
 } MultiReqBuffer;
 
-bool virtio_blk_handle_vq(VirtIOBlock *s, VirtQueue *vq);
+VirtIOBlockReq *virtio_blk_alloc_request(VirtIOBlock *s);
+
+void virtio_blk_free_request(VirtIOBlockReq *req);
+
+void virtio_blk_handle_request(VirtIOBlockReq *req, MultiReqBuffer *mrb);
+
+void virtio_blk_submit_multireq(BlockBackend *blk, MultiReqBuffer *mrb);
 
 #endif

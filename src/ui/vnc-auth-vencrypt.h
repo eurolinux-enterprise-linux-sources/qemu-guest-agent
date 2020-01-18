@@ -24,9 +24,10 @@
  * THE SOFTWARE.
  */
 
-#ifndef QEMU_VNC_AUTH_VENCRYPT_H
-#define QEMU_VNC_AUTH_VENCRYPT_H
+
+#ifndef __QEMU_VNC_AUTH_VENCRYPT_H__
+#define __QEMU_VNC_AUTH_VENCRYPT_H__
 
 void start_auth_vencrypt(VncState *vs);
 
-#endif /* QEMU_VNC_AUTH_VENCRYPT_H */
+#endif /* __QEMU_VNC_AUTH_VENCRYPT_H__ */

@@ -13,8 +13,7 @@
 BOARD_TARGETS = tools_build romfs_build clients_build stage1 subdirs
 
 SUBDIRS = slof rtas 
-COMMON_LIBS = libc libipmi libbootmsg libbases libnvram libelf libusb \
-              libbcm libnet
+COMMON_LIBS = libc libipmi libbootmsg libbases libnvram libelf libusb libbcm
 
 all: $(BOARD_TARGETS)
 	$(MAKE) boot_rom.bin

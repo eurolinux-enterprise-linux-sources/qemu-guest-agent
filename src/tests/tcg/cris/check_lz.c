@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include "sys.h"
 
-static always_inline int cris_lz(int x)
+static inline int cris_lz(int x)
 {
 	int r;
 	asm ("lz\t%1, %0\n" : "=r" (r) : "r" (x));

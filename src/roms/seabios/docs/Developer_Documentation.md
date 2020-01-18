@@ -10,16 +10,15 @@ page.
 See details on [building SeaBIOS](Build overview).
 
 There is also information on the SeaBIOS [Memory Model](Memory Model).
-Along with information on SeaBIOS [Execution and code flow](Execution
-and code flow). A description of the process of linking the final
-SeaBIOS binary is available at [Linking overview](Linking overview).
 
-The list of available runtime configuration items is at
-[runtime config](Runtime_config).
+Along with information on SeaBIOS [Execution and code flow](Execution
+and code flow).
+
+A description of the process of linking the final SeaBIOS binary is
+available at [Linking overview](Linking overview).
 
 To debug SeaBIOS and report problems see SeaBIOS
-[debugging](Debugging). To contribute changes to SeaBIOS see
-[contributing](Contributing).
+[debugging](Debugging).
 
 Useful links to specifications is available at [Developer
 links](Developer links).

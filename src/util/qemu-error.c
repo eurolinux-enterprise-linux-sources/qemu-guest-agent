@@ -10,20 +10,28 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
 #include "monitor/monitor.h"
 #include "qemu/error-report.h"
 
 /*
- * @report_type is the type of message: error, warning or
- * informational.
+ * Print to current monitor if we have one, else to stderr.
+ * TODO should return int, so callers can calculate width, but that
+ * requires surgery to monitor_vprintf().  Left for another day.
  */
-typedef enum {
-    REPORT_TYPE_ERROR,
-    REPORT_TYPE_WARNING,
-    REPORT_TYPE_INFO,
-} report_type;
+void error_vprintf(const char *fmt, va_list ap)
+{
+    if (cur_mon && !monitor_cur_is_qmp()) {
+        monitor_vprintf(cur_mon, fmt, ap);
+    } else {
+        vfprintf(stderr, fmt, ap);
+    }
+}
 
+/*
+ * Print to current monitor if we have one, else to stderr.
+ * TODO just like error_vprintf()
+ */
 void error_printf(const char *fmt, ...)
 {
     va_list ap;
@@ -37,9 +45,11 @@ void error_printf_unless_qmp(const char *fmt, ...)
 {
     va_list ap;
 
-    va_start(ap, fmt);
-    error_vprintf_unless_qmp(fmt, ap);
-    va_end(ap);
+    if (!monitor_cur_is_qmp()) {
+        va_start(ap, fmt);
+        error_vprintf(fmt, ap);
+        va_end(ap);
+    }
 }
 
 static Location std_loc = {
@@ -156,7 +166,7 @@ const char *error_get_progname(void)
 /*
  * Print current location to current monitor if we have one, else to stderr.
  */
-static void print_loc(void)
+static void error_print_loc(void)
 {
     const char *sep = "";
     int i;
@@ -189,14 +199,13 @@ static void print_loc(void)
 
 bool enable_timestamp_msg;
 /*
- * Print a message to current monitor if we have one, else to stderr.
- * @report_type is the type of message: error, warning or informational.
- * Format arguments like vsprintf().  The resulting message should be
- * a single phrase, with no newline or trailing punctuation.
+ * Print an error message to current monitor if we have one, else to stderr.
+ * Format arguments like vsprintf().  The result should not contain
+ * newlines.
  * Prepend the current location and append a newline.
  * It's wrong to call this in a QMP monitor.  Use error_setg() there.
  */
-static void vreport(report_type type, const char *fmt, va_list ap)
+void error_vreport(const char *fmt, va_list ap)
 {
     GTimeVal tv;
     gchar *timestr;
@@ -208,64 +217,15 @@ static void vreport(report_type type, const char *fmt, va_list ap)
         g_free(timestr);
     }
 
-    print_loc();
-
-    switch (type) {
-    case REPORT_TYPE_ERROR:
-        break;
-    case REPORT_TYPE_WARNING:
-        error_printf("warning: ");
-        break;
-    case REPORT_TYPE_INFO:
-        error_printf("info: ");
-        break;
-    }
-
+    error_print_loc();
     error_vprintf(fmt, ap);
     error_printf("\n");
 }
 
 /*
  * Print an error message to current monitor if we have one, else to stderr.
- * Format arguments like vsprintf().  The resulting message should be
- * a single phrase, with no newline or trailing punctuation.
- * Prepend the current location and append a newline.
- * It's wrong to call this in a QMP monitor.  Use error_setg() there.
- */
-void error_vreport(const char *fmt, va_list ap)
-{
-    vreport(REPORT_TYPE_ERROR, fmt, ap);
-}
-
-/*
- * Print a warning message to current monitor if we have one, else to stderr.
- * Format arguments like vsprintf().  The resulting message should be
- * a single phrase, with no newline or trailing punctuation.
- * Prepend the current location and append a newline.
- * It's wrong to call this in a QMP monitor.  Use error_setg() there.
- */
-void warn_vreport(const char *fmt, va_list ap)
-{
-    vreport(REPORT_TYPE_WARNING, fmt, ap);
-}
-
-/*
- * Print an information message to current monitor if we have one, else to
- * stderr.
- * Format arguments like vsprintf().  The resulting message should be
- * a single phrase, with no newline or trailing punctuation.
- * Prepend the current location and append a newline.
- * It's wrong to call this in a QMP monitor.  Use error_setg() there.
- */
-void info_vreport(const char *fmt, va_list ap)
-{
-    vreport(REPORT_TYPE_INFO, fmt, ap);
-}
-
-/*
- * Print an error message to current monitor if we have one, else to stderr.
- * Format arguments like sprintf().  The resulting message should be
- * a single phrase, with no newline or trailing punctuation.
+ * Format arguments like sprintf().  The result should not contain
+ * newlines.
  * Prepend the current location and append a newline.
  * It's wrong to call this in a QMP monitor.  Use error_setg() there.
  */
@@ -274,39 +234,6 @@ void error_report(const char *fmt, ...)
     va_list ap;
 
     va_start(ap, fmt);
-    vreport(REPORT_TYPE_ERROR, fmt, ap);
-    va_end(ap);
-}
-
-/*
- * Print a warning message to current monitor if we have one, else to stderr.
- * Format arguments like sprintf(). The resulting message should be a
- * single phrase, with no newline or trailing punctuation.
- * Prepend the current location and append a newline.
- * It's wrong to call this in a QMP monitor.  Use error_setg() there.
- */
-void warn_report(const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    vreport(REPORT_TYPE_WARNING, fmt, ap);
-    va_end(ap);
-}
-
-/*
- * Print an information message to current monitor if we have one, else to
- * stderr.
- * Format arguments like sprintf(). The resulting message should be a
- * single phrase, with no newline or trailing punctuation.
- * Prepend the current location and append a newline.
- * It's wrong to call this in a QMP monitor.  Use error_setg() there.
- */
-void info_report(const char *fmt, ...)
-{
-    va_list ap;
-
-    va_start(ap, fmt);
-    vreport(REPORT_TYPE_INFO, fmt, ap);
+    error_vreport(fmt, ap);
     va_end(ap);
 }

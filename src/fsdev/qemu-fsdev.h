@@ -1,5 +1,5 @@
 /*
- * 9p
+ * Virtio 9p
  *
  * Copyright IBM, Corp. 2010
  *
@@ -12,6 +12,7 @@
  */
 #ifndef QEMU_FSDEV_H
 #define QEMU_FSDEV_H
+#include "qemu/option.h"
 #include "file-op-9p.h"
 
 

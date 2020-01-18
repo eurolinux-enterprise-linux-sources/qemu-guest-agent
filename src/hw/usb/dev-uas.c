@@ -9,7 +9,6 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "qemu/option.h"
 #include "qemu/config-file.h"
@@ -19,7 +18,7 @@
 #include "hw/usb.h"
 #include "hw/usb/desc.h"
 #include "hw/scsi/scsi.h"
-#include "scsi/constants.h"
+#include "block/scsi.h"
 
 /* --------------------------------------------------------------------- */
 
@@ -653,8 +652,7 @@ static void usb_uas_handle_control(USBDevice *dev, USBPacket *p,
     if (ret >= 0) {
         return;
     }
-    error_report("%s: unhandled control request (req 0x%x, val 0x%x, idx 0x%x",
-                 __func__, request, value, index);
+    error_report("%s: unhandled control request", __func__);
     p->status = USB_RET_STALL;
 }
 
@@ -891,25 +889,19 @@ static void usb_uas_handle_data(USBDevice *dev, USBPacket *p)
     }
 }
 
-static void usb_uas_unrealize(USBDevice *dev, Error **errp)
+static void usb_uas_handle_destroy(USBDevice *dev)
 {
     UASDevice *uas = USB_UAS(dev);
 
     qemu_bh_delete(uas->status_bh);
-
-    object_unref(OBJECT(&uas->bus));
 }
 
 static void usb_uas_realize(USBDevice *dev, Error **errp)
 {
     UASDevice *uas = USB_UAS(dev);
-    DeviceState *d = DEVICE(dev);
 
     usb_desc_create_serial(dev);
     usb_desc_init(dev);
-    if (d->hotplugged) {
-        uas->dev.auto_attach = 0;
-    }
 
     QTAILQ_INIT(&uas->results);
     QTAILQ_INIT(&uas->requests);
@@ -946,8 +938,7 @@ static void usb_uas_class_initfn(ObjectClass *klass, void *data)
     uc->handle_reset   = usb_uas_handle_reset;
     uc->handle_control = usb_uas_handle_control;
     uc->handle_data    = usb_uas_handle_data;
-    uc->unrealize      = usb_uas_unrealize;
-    uc->attached_settable = true;
+    uc->handle_destroy = usb_uas_handle_destroy;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
     dc->fw_name = "storage";
     dc->vmsd = &vmstate_usb_uas;

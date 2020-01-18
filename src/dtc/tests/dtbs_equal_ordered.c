@@ -28,7 +28,7 @@
 #include "tests.h"
 #include "testdata.h"
 
-static int notequal; /* = 0 */
+int notequal; /* = 0 */
 
 #define MISMATCH(fmt, ...)			\
 	do { \

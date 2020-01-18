@@ -16,20 +16,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define NETFRONT_NUM_TX_DESC 16
 
 /** Number of receive ring entries */
-#define NETFRONT_NUM_RX_DESC 32
-
-/** Receive ring fill level
- *
- * The xen-netback driver from kernels 3.18 to 4.2 inclusive have a
- * bug (CA-163395) which prevents packet reception if fewer than 18
- * receive descriptors are available.  This was fixed in upstream
- * kernel commit d5d4852 ("xen-netback: require fewer guest Rx slots
- * when not using GSO").
- *
- * We provide 18 receive descriptors to avoid unpleasant silent
- * failures on these kernel versions.
- */
-#define NETFRONT_RX_FILL 18
+#define NETFRONT_NUM_RX_DESC 8
 
 /** Grant reference indices */
 enum netfront_ref_index {
@@ -102,21 +89,6 @@ netfront_init_ring ( struct netfront_ring *ring, const char *ref_key,
 }
 
 /**
- * Calculate descriptor ring fill level
- *
- * @v ring		Descriptor ring
- * @v fill		Fill level
- */
-static inline __attribute__ (( always_inline )) unsigned int
-netfront_ring_fill ( struct netfront_ring *ring ) {
-	unsigned int fill_level;
-
-	fill_level = ( ring->id_prod - ring->id_cons );
-	assert ( fill_level <= ring->count );
-	return fill_level;
-}
-
-/**
  * Check whether or not descriptor ring is full
  *
  * @v ring		Descriptor ring
@@ -124,8 +96,11 @@ netfront_ring_fill ( struct netfront_ring *ring ) {
  */
 static inline __attribute__ (( always_inline )) int
 netfront_ring_is_full ( struct netfront_ring *ring ) {
+	unsigned int fill_level;
 
-	return ( netfront_ring_fill ( ring ) >= ring->count );
+	fill_level = ( ring->id_prod - ring->id_cons );
+	assert ( fill_level <= ring->count );
+	return ( fill_level >= ring->count );
 }
 
 /**
@@ -137,7 +112,7 @@ netfront_ring_is_full ( struct netfront_ring *ring ) {
 static inline __attribute__ (( always_inline )) int
 netfront_ring_is_empty ( struct netfront_ring *ring ) {
 
-	return ( netfront_ring_fill ( ring ) == 0 );
+	return ( ring->id_prod == ring->id_cons );
 }
 
 /** A netfront NIC */

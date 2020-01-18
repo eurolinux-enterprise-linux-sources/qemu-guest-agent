@@ -17,17 +17,14 @@
  * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/msi.h"
 #include "qemu/timer.h"
-#include "qemu/bitops.h"
-#include "hw/audio/soundhw.h"
+#include "hw/audio/audio.h"
 #include "intel-hda.h"
 #include "intel-hda-defs.h"
 #include "sysemu/dma.h"
-#include "qapi/error.h"
 
 /* --------------------------------------------------------------------- */
 /* hda bus                                                               */
@@ -52,33 +49,31 @@ void hda_codec_bus_init(DeviceState *dev, HDACodecBus *bus, size_t bus_size,
     bus->xfer = xfer;
 }
 
-static void hda_codec_dev_realize(DeviceState *qdev, Error **errp)
+static int hda_codec_dev_init(DeviceState *qdev)
 {
-    HDACodecBus *bus = HDA_BUS(qdev->parent_bus);
-    HDACodecDevice *dev = HDA_CODEC_DEVICE(qdev);
+    HDACodecBus *bus = DO_UPCAST(HDACodecBus, qbus, qdev->parent_bus);
+    HDACodecDevice *dev = DO_UPCAST(HDACodecDevice, qdev, qdev);
     HDACodecDeviceClass *cdc = HDA_CODEC_DEVICE_GET_CLASS(dev);
 
     if (dev->cad == -1) {
         dev->cad = bus->next_cad;
     }
     if (dev->cad >= 15) {
-        error_setg(errp, "HDA audio codec address is full");
-        return;
+        return -1;
     }
     bus->next_cad = dev->cad + 1;
-    if (cdc->init(dev) != 0) {
-        error_setg(errp, "HDA audio init failed");
-    }
+    return cdc->init(dev);
 }
 
-static void hda_codec_dev_unrealize(DeviceState *qdev, Error **errp)
+static int hda_codec_dev_exit(DeviceState *qdev)
 {
-    HDACodecDevice *dev = HDA_CODEC_DEVICE(qdev);
+    HDACodecDevice *dev = DO_UPCAST(HDACodecDevice, qdev, qdev);
     HDACodecDeviceClass *cdc = HDA_CODEC_DEVICE_GET_CLASS(dev);
 
     if (cdc->exit) {
         cdc->exit(dev);
     }
+    return 0;
 }
 
 HDACodecDevice *hda_codec_find(HDACodecBus *bus, uint32_t cad)
@@ -88,7 +83,7 @@ HDACodecDevice *hda_codec_find(HDACodecBus *bus, uint32_t cad)
 
     QTAILQ_FOREACH(kid, &bus->qbus.children, sibling) {
         DeviceState *qdev = kid->child;
-        cdev = HDA_CODEC_DEVICE(qdev);
+        cdev = DO_UPCAST(HDACodecDevice, qdev, qdev);
         if (cdev->cad == cad) {
             return cdev;
         }
@@ -98,14 +93,14 @@ HDACodecDevice *hda_codec_find(HDACodecBus *bus, uint32_t cad)
 
 void hda_codec_response(HDACodecDevice *dev, bool solicited, uint32_t response)
 {
-    HDACodecBus *bus = HDA_BUS(dev->qdev.parent_bus);
+    HDACodecBus *bus = DO_UPCAST(HDACodecBus, qbus, dev->qdev.parent_bus);
     bus->response(dev, solicited, response);
 }
 
 bool hda_codec_xfer(HDACodecDevice *dev, uint32_t stnr, bool output,
                     uint8_t *buf, uint32_t len)
 {
-    HDACodecBus *bus = HDA_BUS(dev->qdev.parent_bus);
+    HDACodecBus *bus = DO_UPCAST(HDACodecBus, qbus, dev->qdev.parent_bus);
     return bus->xfer(dev, stnr, output, buf, len);
 }
 
@@ -191,7 +186,7 @@ struct IntelHDAState {
 
     /* properties */
     uint32_t debug;
-    OnOffAuto msi;
+    uint32_t msi;
     bool old_msi_addr;
 };
 
@@ -219,7 +214,10 @@ static void intel_hda_reset(DeviceState *dev);
 
 static hwaddr intel_hda_addr(uint32_t lbase, uint32_t ubase)
 {
-    return ((uint64_t)ubase << 32) | lbase;
+    hwaddr addr;
+
+    addr = ((uint64_t)ubase << 32) | lbase;
+    return addr;
 }
 
 static void intel_hda_update_int_sts(IntelHDAState *d)
@@ -256,7 +254,7 @@ static void intel_hda_update_int_sts(IntelHDAState *d)
 
 static void intel_hda_update_irq(IntelHDAState *d)
 {
-    bool msi = msi_enabled(&d->pci);
+    int msi = d->msi && msi_enabled(&d->pci);
     int level;
 
     intel_hda_update_int_sts(d);
@@ -265,7 +263,7 @@ static void intel_hda_update_irq(IntelHDAState *d)
     } else {
         level = 0;
     }
-    dprint(d, 2, "%s: level %d [%s]\n", __func__,
+    dprint(d, 2, "%s: level %d [%s]\n", __FUNCTION__,
            level, msi ? "msi" : "intx");
     if (msi) {
         if (level) {
@@ -285,7 +283,7 @@ static int intel_hda_send_command(IntelHDAState *d, uint32_t verb)
     cad = (verb >> 28) & 0x0f;
     if (verb & (1 << 27)) {
         /* indirect node addressing, not specified in HDA 1.0 */
-        dprint(d, 1, "%s: indirect node addressing (guest bug?)\n", __func__);
+        dprint(d, 1, "%s: indirect node addressing (guest bug?)\n", __FUNCTION__);
         return -1;
     }
     nid = (verb >> 20) & 0x7f;
@@ -293,7 +291,7 @@ static int intel_hda_send_command(IntelHDAState *d, uint32_t verb)
 
     codec = hda_codec_find(&d->codecs, cad);
     if (codec == NULL) {
-        dprint(d, 1, "%s: addressed non-existing codec\n", __func__);
+        dprint(d, 1, "%s: addressed non-existing codec\n", __FUNCTION__);
         return -1;
     }
     cdc = HDA_CODEC_DEVICE_GET_CLASS(codec);
@@ -307,22 +305,22 @@ static void intel_hda_corb_run(IntelHDAState *d)
     uint32_t rp, verb;
 
     if (d->ics & ICH6_IRS_BUSY) {
-        dprint(d, 2, "%s: [icw] verb 0x%08x\n", __func__, d->icw);
+        dprint(d, 2, "%s: [icw] verb 0x%08x\n", __FUNCTION__, d->icw);
         intel_hda_send_command(d, d->icw);
         return;
     }
 
     for (;;) {
         if (!(d->corb_ctl & ICH6_CORBCTL_RUN)) {
-            dprint(d, 2, "%s: !run\n", __func__);
+            dprint(d, 2, "%s: !run\n", __FUNCTION__);
             return;
         }
         if ((d->corb_rp & 0xff) == d->corb_wp) {
-            dprint(d, 2, "%s: corb ring empty\n", __func__);
+            dprint(d, 2, "%s: corb ring empty\n", __FUNCTION__);
             return;
         }
         if (d->rirb_count == d->rirb_cnt) {
-            dprint(d, 2, "%s: rirb count reached\n", __func__);
+            dprint(d, 2, "%s: rirb count reached\n", __FUNCTION__);
             return;
         }
 
@@ -331,21 +329,21 @@ static void intel_hda_corb_run(IntelHDAState *d)
         verb = ldl_le_pci_dma(&d->pci, addr + 4*rp);
         d->corb_rp = rp;
 
-        dprint(d, 2, "%s: [rp 0x%x] verb 0x%08x\n", __func__, rp, verb);
+        dprint(d, 2, "%s: [rp 0x%x] verb 0x%08x\n", __FUNCTION__, rp, verb);
         intel_hda_send_command(d, verb);
     }
 }
 
 static void intel_hda_response(HDACodecDevice *dev, bool solicited, uint32_t response)
 {
-    HDACodecBus *bus = HDA_BUS(dev->qdev.parent_bus);
+    HDACodecBus *bus = DO_UPCAST(HDACodecBus, qbus, dev->qdev.parent_bus);
     IntelHDAState *d = container_of(bus, IntelHDAState, codecs);
     hwaddr addr;
     uint32_t wp, ex;
 
     if (d->ics & ICH6_IRS_BUSY) {
         dprint(d, 2, "%s: [irr] response 0x%x, cad 0x%x\n",
-               __func__, response, dev->cad);
+               __FUNCTION__, response, dev->cad);
         d->irr = response;
         d->ics &= ~(ICH6_IRS_BUSY | 0xf0);
         d->ics |= (ICH6_IRS_VALID | (dev->cad << 4));
@@ -353,7 +351,7 @@ static void intel_hda_response(HDACodecDevice *dev, bool solicited, uint32_t res
     }
 
     if (!(d->rirb_ctl & ICH6_RBCTL_DMA_EN)) {
-        dprint(d, 1, "%s: rirb dma disabled, drop codec response\n", __func__);
+        dprint(d, 1, "%s: rirb dma disabled, drop codec response\n", __FUNCTION__);
         return;
     }
 
@@ -365,17 +363,17 @@ static void intel_hda_response(HDACodecDevice *dev, bool solicited, uint32_t res
     d->rirb_wp = wp;
 
     dprint(d, 2, "%s: [wp 0x%x] response 0x%x, extra 0x%x\n",
-           __func__, wp, response, ex);
+           __FUNCTION__, wp, response, ex);
 
     d->rirb_count++;
     if (d->rirb_count == d->rirb_cnt) {
-        dprint(d, 2, "%s: rirb count reached (%d)\n", __func__, d->rirb_count);
+        dprint(d, 2, "%s: rirb count reached (%d)\n", __FUNCTION__, d->rirb_count);
         if (d->rirb_ctl & ICH6_RBCTL_IRQ_EN) {
             d->rirb_sts |= ICH6_RBSTS_IRQ;
             intel_hda_update_irq(d);
         }
     } else if ((d->corb_rp & 0xff) == d->corb_wp) {
-        dprint(d, 2, "%s: corb ring empty (%d/%d)\n", __func__,
+        dprint(d, 2, "%s: corb ring empty (%d/%d)\n", __FUNCTION__,
                d->rirb_count, d->rirb_cnt);
         if (d->rirb_ctl & ICH6_RBCTL_IRQ_EN) {
             d->rirb_sts |= ICH6_RBSTS_IRQ;
@@ -387,7 +385,7 @@ static void intel_hda_response(HDACodecDevice *dev, bool solicited, uint32_t res
 static bool intel_hda_xfer(HDACodecDevice *dev, uint32_t stnr, bool output,
                            uint8_t *buf, uint32_t len)
 {
-    HDACodecBus *bus = HDA_BUS(dev->qdev.parent_bus);
+    HDACodecBus *bus = DO_UPCAST(HDACodecBus, qbus, dev->qdev.parent_bus);
     IntelHDAState *d = container_of(bus, IntelHDAState, codecs);
     hwaddr addr;
     uint32_t s, copy, left;
@@ -416,8 +414,7 @@ static bool intel_hda_xfer(HDACodecDevice *dev, uint32_t stnr, bool output,
     }
 
     left = len;
-    s = st->bentries;
-    while (left > 0 && s-- > 0) {
+    while (left > 0) {
         copy = left;
         if (copy > st->bsize - st->lpib)
             copy = st->bsize - st->lpib;
@@ -495,7 +492,7 @@ static void intel_hda_notify_codecs(IntelHDAState *d, uint32_t stream, bool runn
         DeviceState *qdev = kid->child;
         HDACodecDeviceClass *cdc;
 
-        cdev = HDA_CODEC_DEVICE(qdev);
+        cdev = DO_UPCAST(HDACodecDevice, qdev, qdev);
         cdc = HDA_CODEC_DEVICE_GET_CLASS(cdev);
         if (cdc->stream) {
             cdc->stream(cdev, stream, running, output);
@@ -1044,29 +1041,66 @@ static void intel_hda_regs_reset(IntelHDAState *d)
 
 /* --------------------------------------------------------------------- */
 
-static void intel_hda_mmio_write(void *opaque, hwaddr addr, uint64_t val,
-                                 unsigned size)
+static void intel_hda_mmio_writeb(void *opaque, hwaddr addr, uint32_t val)
 {
     IntelHDAState *d = opaque;
     const IntelHDAReg *reg = intel_hda_reg_find(d, addr);
 
-    intel_hda_reg_write(d, reg, val, MAKE_64BIT_MASK(0, size * 8));
+    intel_hda_reg_write(d, reg, val, 0xff);
 }
 
-static uint64_t intel_hda_mmio_read(void *opaque, hwaddr addr, unsigned size)
+static void intel_hda_mmio_writew(void *opaque, hwaddr addr, uint32_t val)
 {
     IntelHDAState *d = opaque;
     const IntelHDAReg *reg = intel_hda_reg_find(d, addr);
 
-    return intel_hda_reg_read(d, reg, MAKE_64BIT_MASK(0, size * 8));
+    intel_hda_reg_write(d, reg, val, 0xffff);
+}
+
+static void intel_hda_mmio_writel(void *opaque, hwaddr addr, uint32_t val)
+{
+    IntelHDAState *d = opaque;
+    const IntelHDAReg *reg = intel_hda_reg_find(d, addr);
+
+    intel_hda_reg_write(d, reg, val, 0xffffffff);
+}
+
+static uint32_t intel_hda_mmio_readb(void *opaque, hwaddr addr)
+{
+    IntelHDAState *d = opaque;
+    const IntelHDAReg *reg = intel_hda_reg_find(d, addr);
+
+    return intel_hda_reg_read(d, reg, 0xff);
+}
+
+static uint32_t intel_hda_mmio_readw(void *opaque, hwaddr addr)
+{
+    IntelHDAState *d = opaque;
+    const IntelHDAReg *reg = intel_hda_reg_find(d, addr);
+
+    return intel_hda_reg_read(d, reg, 0xffff);
+}
+
+static uint32_t intel_hda_mmio_readl(void *opaque, hwaddr addr)
+{
+    IntelHDAState *d = opaque;
+    const IntelHDAReg *reg = intel_hda_reg_find(d, addr);
+
+    return intel_hda_reg_read(d, reg, 0xffffffff);
 }
 
 static const MemoryRegionOps intel_hda_mmio_ops = {
-    .read = intel_hda_mmio_read,
-    .write = intel_hda_mmio_write,
-    .impl = {
-        .min_access_size = 1,
-        .max_access_size = 4,
+    .old_mmio = {
+        .read = {
+            intel_hda_mmio_readb,
+            intel_hda_mmio_readw,
+            intel_hda_mmio_readl,
+        },
+        .write = {
+            intel_hda_mmio_writeb,
+            intel_hda_mmio_writew,
+            intel_hda_mmio_writel,
+        },
     },
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
@@ -1085,7 +1119,7 @@ static void intel_hda_reset(DeviceState *dev)
     /* reset codecs */
     QTAILQ_FOREACH(kid, &d->codecs.qbus.children, sibling) {
         DeviceState *qdev = kid->child;
-        cdev = HDA_CODEC_DEVICE(qdev);
+        cdev = DO_UPCAST(HDACodecDevice, qdev, qdev);
         device_reset(DEVICE(cdev));
         d->state_sts |= (1 << cdev->cad);
     }
@@ -1096,8 +1130,6 @@ static void intel_hda_realize(PCIDevice *pci, Error **errp)
 {
     IntelHDAState *d = INTEL_HDA(pci);
     uint8_t *conf = d->pci.config;
-    Error *err = NULL;
-    int ret;
 
     d->name = object_get_typename(OBJECT(d));
 
@@ -1106,27 +1138,12 @@ static void intel_hda_realize(PCIDevice *pci, Error **errp)
     /* HDCTL off 0x40 bit 0 selects signaling mode (1-HDA, 0 - Ac97) 18.1.19 */
     conf[0x40] = 0x01;
 
-    if (d->msi != ON_OFF_AUTO_OFF) {
-        ret = msi_init(&d->pci, d->old_msi_addr ? 0x50 : 0x60,
-                       1, true, false, &err);
-        /* Any error other than -ENOTSUP(board's MSI support is broken)
-         * is a programming error */
-        assert(!ret || ret == -ENOTSUP);
-        if (ret && d->msi == ON_OFF_AUTO_ON) {
-            /* Can't satisfy user's explicit msi=on request, fail */
-            error_append_hint(&err, "You have to use msi=auto (default) or "
-                    "msi=off with this machine type.\n");
-            error_propagate(errp, err);
-            return;
-        }
-        assert(!err || d->msi == ON_OFF_AUTO_AUTO);
-        /* With msi=auto, we fall back to MSI off silently */
-        error_free(err);
-    }
-
     memory_region_init_io(&d->mmio, OBJECT(d), &intel_hda_mmio_ops, d,
                           "intel-hda", 0x4000);
     pci_register_bar(&d->pci, 0, 0, &d->mmio);
+    if (d->msi) {
+        msi_init(&d->pci, d->old_msi_addr ? 0x50 : 0x60, 1, true, false);
+    }
 
     hda_codec_bus_init(DEVICE(pci), &d->codecs, sizeof(d->codecs),
                        intel_hda_response, intel_hda_xfer);
@@ -1144,7 +1161,7 @@ static int intel_hda_post_load(void *opaque, int version)
     IntelHDAState* d = opaque;
     int i;
 
-    dprint(d, 1, "%s\n", __func__);
+    dprint(d, 1, "%s\n", __FUNCTION__);
     for (i = 0; i < ARRAY_SIZE(d->st); i++) {
         if (d->st[i].ctl & 0x02) {
             intel_hda_parse_bdl(d, &d->st[i]);
@@ -1216,7 +1233,7 @@ static const VMStateDescription vmstate_intel_hda = {
 
 static Property intel_hda_properties[] = {
     DEFINE_PROP_UINT32("debug", IntelHDAState, debug, 0),
-    DEFINE_PROP_ON_OFF_AUTO("msi", IntelHDAState, msi, ON_OFF_AUTO_AUTO),
+    DEFINE_PROP_UINT32("msi", IntelHDAState, msi, 1),
     DEFINE_PROP_BOOL("old_msi_addr", IntelHDAState, old_msi_addr, false),
     DEFINE_PROP_END_OF_LIST(),
 };
@@ -1263,10 +1280,6 @@ static const TypeInfo intel_hda_info = {
     .instance_size = sizeof(IntelHDAState),
     .class_init    = intel_hda_class_init,
     .abstract      = true,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static const TypeInfo intel_hda_info_ich6 = {
@@ -1284,8 +1297,8 @@ static const TypeInfo intel_hda_info_ich9 = {
 static void hda_codec_device_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *k = DEVICE_CLASS(klass);
-    k->realize = hda_codec_dev_realize;
-    k->unrealize = hda_codec_dev_unrealize;
+    k->init = hda_codec_dev_init;
+    k->exit = hda_codec_dev_exit;
     set_bit(DEVICE_CATEGORY_SOUND, k->categories);
     k->bus_type = TYPE_HDA_BUS;
     k->props = hda_props;

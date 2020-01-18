@@ -22,17 +22,13 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/boards.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/blockdev.h"
-#include "qapi/qmp/qdict.h"
 #include "qemu/config-file.h"
-#include "qemu/option.h"
 #include "sysemu/sysemu.h"
 #include "monitor/monitor.h"
-#include "block/block_int.h"
 
 static DriveInfo *add_init_drive(const char *optstr)
 {
@@ -58,12 +54,6 @@ void hmp_drive_add(Monitor *mon, const QDict *qdict)
 {
     DriveInfo *dinfo = NULL;
     const char *opts = qdict_get_str(qdict, "opts");
-    bool node = qdict_get_try_bool(qdict, "node", false);
-
-    if (node) {
-        hmp_drive_add_node(mon, opts);
-        return;
-    }
 
     dinfo = add_init_drive(opts);
     if (!dinfo) {
@@ -86,8 +76,6 @@ void hmp_drive_add(Monitor *mon, const QDict *qdict)
 
 err:
     if (dinfo) {
-        BlockBackend *blk = blk_by_legacy_dinfo(dinfo);
-        monitor_remove_blk(blk);
-        blk_unref(blk);
+        blk_unref(blk_by_legacy_dinfo(dinfo));
     }
 }

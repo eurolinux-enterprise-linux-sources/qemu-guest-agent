@@ -1,7 +1,5 @@
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "qemu-common.h"
-#include "qemu/host-utils.h"
+#include <stdint.h>
 #include "qemu/range.h"
 #include "qemu/error-report.h"
 #include "hw/pci/shpc.h"
@@ -122,6 +120,16 @@
 #define SHPC_IDX_TO_PCI(slot) ((slot) + 1)
 #define SHPC_PCI_TO_IDX(pci_slot) ((pci_slot) - 1)
 #define SHPC_IDX_TO_PHYSICAL(slot) ((slot) + 1)
+
+static int roundup_pow_of_two(int x)
+{
+    x |= (x >> 1);
+    x |= (x >> 2);
+    x |= (x >> 4);
+    x |= (x >> 8);
+    x |= (x >> 16);
+    return x + 1;
+}
 
 static uint16_t shpc_get_status(SHPCDevice *shpc, int slot, uint16_t msk)
 {
@@ -437,13 +445,12 @@ static void shpc_cap_update_dword(PCIDevice *d)
 }
 
 /* Add SHPC capability to the config space for the device. */
-static int shpc_cap_add_config(PCIDevice *d, Error **errp)
+static int shpc_cap_add_config(PCIDevice *d)
 {
     uint8_t *config;
     int config_offset;
     config_offset = pci_add_capability(d, PCI_CAP_ID_SHPC,
-                                       0, SHPC_CAP_LENGTH,
-                                       errp);
+                                       0, SHPC_CAP_LENGTH);
     if (config_offset < 0) {
         return config_offset;
     }
@@ -573,14 +580,13 @@ void shpc_device_hot_unplug_request_cb(HotplugHandler *hotplug_dev,
 }
 
 /* Initialize the SHPC structure in bridge's BAR. */
-int shpc_init(PCIDevice *d, PCIBus *sec_bus, MemoryRegion *bar,
-              unsigned offset, Error **errp)
+int shpc_init(PCIDevice *d, PCIBus *sec_bus, MemoryRegion *bar, unsigned offset)
 {
     int i, ret;
     int nslots = SHPC_MAX_SLOTS; /* TODO: qdev property? */
     SHPCDevice *shpc = d->shpc = g_malloc0(sizeof(*d->shpc));
     shpc->sec_bus = sec_bus;
-    ret = shpc_cap_add_config(d, errp);
+    ret = shpc_cap_add_config(d);
     if (ret) {
         g_free(d->shpc);
         return ret;
@@ -647,7 +653,7 @@ int shpc_init(PCIDevice *d, PCIBus *sec_bus, MemoryRegion *bar,
 
 int shpc_bar_size(PCIDevice *d)
 {
-    return pow2roundup32(SHPC_SLOT_REG(SHPC_MAX_SLOTS));
+    return roundup_pow_of_two(SHPC_SLOT_REG(SHPC_MAX_SLOTS));
 }
 
 void shpc_cleanup(PCIDevice *d, MemoryRegion *bar)
@@ -688,16 +694,13 @@ void shpc_cap_write_config(PCIDevice *d, uint32_t addr, uint32_t val, int l)
     shpc_cap_update_dword(d);
 }
 
-static int shpc_save(QEMUFile *f, void *pv, size_t size, VMStateField *field,
-                     QJSON *vmdesc)
+static void shpc_save(QEMUFile *f, void *pv, size_t size)
 {
     PCIDevice *d = container_of(pv, PCIDevice, shpc);
     qemu_put_buffer(f, d->shpc->config, SHPC_SIZEOF(d));
-
-    return 0;
 }
 
-static int shpc_load(QEMUFile *f, void *pv, size_t size, VMStateField *field)
+static int shpc_load(QEMUFile *f, void *pv, size_t size)
 {
     PCIDevice *d = container_of(pv, PCIDevice, shpc);
     int ret = qemu_get_buffer(f, d->shpc->config, SHPC_SIZEOF(d));

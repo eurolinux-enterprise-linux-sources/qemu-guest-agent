@@ -22,11 +22,10 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
 #include "hw/sysbus.h"
 #include "net/net.h"
 #include "hw/cris/etraxfs.h"
-#include "qemu/error-report.h"
 
 #define D(x)
 
@@ -578,7 +577,7 @@ static const MemoryRegionOps eth_ops = {
 };
 
 static NetClientInfo net_etraxfs_info = {
-    .type = NET_CLIENT_DRIVER_NIC,
+    .type = NET_CLIENT_OPTIONS_KIND_NIC,
     .size = sizeof(NICState),
     .receive = eth_receive,
     .link_status_changed = eth_set_link,
@@ -590,8 +589,7 @@ static int fs_eth_init(SysBusDevice *sbd)
     ETRAXFSEthState *s = ETRAX_FS_ETH(dev);
 
     if (!s->dma_out || !s->dma_in) {
-        error_report("Unconnected ETRAX-FS Ethernet MAC");
-        return -1;
+        hw_error("Unconnected ETRAX-FS Ethernet MAC.\n");
     }
 
     s->dma_out->client.push = eth_tx_push;
@@ -630,7 +628,7 @@ static void etraxfs_eth_class_init(ObjectClass *klass, void *data)
     k->init = fs_eth_init;
     dc->props = etraxfs_eth_properties;
     /* Reason: pointer properties "dma_out", "dma_in" */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo etraxfs_eth_info = {

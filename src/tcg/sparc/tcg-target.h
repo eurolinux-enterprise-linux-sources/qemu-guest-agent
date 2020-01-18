@@ -21,9 +21,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-
-#ifndef SPARC_TCG_TARGET_H
-#define SPARC_TCG_TARGET_H
+#ifndef TCG_TARGET_SPARC 
+#define TCG_TARGET_SPARC 1
 
 #define TCG_TARGET_REG_BITS 64
 
@@ -110,12 +109,7 @@ extern bool use_vis3_instructions;
 #define TCG_TARGET_HAS_eqv_i32          0
 #define TCG_TARGET_HAS_nand_i32         0
 #define TCG_TARGET_HAS_nor_i32          0
-#define TCG_TARGET_HAS_clz_i32          0
-#define TCG_TARGET_HAS_ctz_i32          0
-#define TCG_TARGET_HAS_ctpop_i32        0
 #define TCG_TARGET_HAS_deposit_i32      0
-#define TCG_TARGET_HAS_extract_i32      0
-#define TCG_TARGET_HAS_sextract_i32     0
 #define TCG_TARGET_HAS_movcond_i32      1
 #define TCG_TARGET_HAS_add2_i32         1
 #define TCG_TARGET_HAS_sub2_i32         1
@@ -123,8 +117,6 @@ extern bool use_vis3_instructions;
 #define TCG_TARGET_HAS_muls2_i32        1
 #define TCG_TARGET_HAS_muluh_i32        0
 #define TCG_TARGET_HAS_mulsh_i32        0
-#define TCG_TARGET_HAS_goto_ptr         1
-#define TCG_TARGET_HAS_direct_jump      1
 
 #define TCG_TARGET_HAS_extrl_i64_i32    1
 #define TCG_TARGET_HAS_extrh_i64_i32    1
@@ -147,12 +139,7 @@ extern bool use_vis3_instructions;
 #define TCG_TARGET_HAS_eqv_i64          0
 #define TCG_TARGET_HAS_nand_i64         0
 #define TCG_TARGET_HAS_nor_i64          0
-#define TCG_TARGET_HAS_clz_i64          0
-#define TCG_TARGET_HAS_ctz_i64          0
-#define TCG_TARGET_HAS_ctpop_i64        0
 #define TCG_TARGET_HAS_deposit_i64      0
-#define TCG_TARGET_HAS_extract_i64      0
-#define TCG_TARGET_HAS_sextract_i64     0
 #define TCG_TARGET_HAS_movcond_i64      1
 #define TCG_TARGET_HAS_add2_i64         1
 #define TCG_TARGET_HAS_sub2_i64         1
@@ -163,8 +150,6 @@ extern bool use_vis3_instructions;
 
 #define TCG_AREG0 TCG_REG_I0
 
-#define TCG_TARGET_DEFAULT_MO (0)
-
 static inline void flush_icache_range(uintptr_t start, uintptr_t stop)
 {
     uintptr_t p;
@@ -172,9 +157,5 @@ static inline void flush_icache_range(uintptr_t start, uintptr_t stop)
         __asm__ __volatile__("flush\t%0" : : "r" (p));
     }
 }
-
-void tb_target_set_jmp_target(uintptr_t, uintptr_t, uintptr_t);
-
-#define TCG_TARGET_NEED_POOL_LABELS
 
 #endif

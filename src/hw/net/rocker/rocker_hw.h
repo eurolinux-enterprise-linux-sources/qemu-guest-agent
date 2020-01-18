@@ -6,8 +6,8 @@
  *
  */
 
-#ifndef ROCKER_HW_H
-#define ROCKER_HW_H
+#ifndef _ROCKER_HW_
+#define _ROCKER_HW_
 
 #define __le16 uint16_t
 #define __le32 uint32_t
@@ -490,4 +490,4 @@ enum rocker_of_dpa_overlay_type {
  */
 #define ROCKER_CONTROL_RESET            (1 << 0)
 
-#endif /* ROCKER_HW_H */
+#endif /* _ROCKER_HW_ */

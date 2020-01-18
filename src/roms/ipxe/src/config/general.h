@@ -38,7 +38,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #undef	NET_PROTO_IPV6		/* IPv6 protocol */
 #undef	NET_PROTO_FCOE		/* Fibre Channel over Ethernet protocol */
 #define	NET_PROTO_STP		/* Spanning Tree protocol */
-#define	NET_PROTO_LACP		/* Link Aggregation control protocol */
 
 /*
  * PXE support
@@ -58,7 +57,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #undef	DOWNLOAD_PROTO_FTP	/* File Transfer Protocol */
 #undef	DOWNLOAD_PROTO_SLAM	/* Scalable Local Area Multicast */
 #undef	DOWNLOAD_PROTO_NFS	/* Network File System Protocol */
-//#undef DOWNLOAD_PROTO_FILE	/* Local filesystem access */
 
 /*
  * SAN boot protocols
@@ -78,7 +76,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define HTTP_AUTH_BASIC		/* Basic authentication */
 #define HTTP_AUTH_DIGEST	/* Digest authentication */
 //#define HTTP_ENC_PEERDIST	/* PeerDist content encoding */
-//#define HTTP_HACK_GCE		/* Google Compute Engine hacks */
 
 /*
  * 802.11 cryptosystems and handshaking protocols
@@ -112,9 +109,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 //#define	IMAGE_EFI		/* EFI image support */
 //#define	IMAGE_SDI		/* SDI image support */
 //#define	IMAGE_PNM		/* PNM image support */
-#define	IMAGE_PNG		/* PNG image support */
-#define	IMAGE_DER		/* DER image support */
-#define	IMAGE_PEM		/* PEM image support */
+//#define	IMAGE_PNG		/* PNG image support */
 
 /*
  * Command-line commands to include
@@ -125,7 +120,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define	CONFIG_CMD		/* Option configuration console */
 #define	IFMGMT_CMD		/* Interface management commands */
 #define	IWMGMT_CMD		/* Wireless interface management commands */
-#define IBMGMT_CMD		/* Infiniband management commands */
 #define FCMGMT_CMD		/* Fibre Channel management commands */
 #define	ROUTE_CMD		/* Routing table management commands */
 #define IMAGE_CMD		/* Image management commands */
@@ -150,8 +144,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 //#define CONSOLE_CMD		/* Console command */
 //#define IPSTAT_CMD		/* IP statistics commands */
 //#define PROFSTAT_CMD		/* Profiling commands */
-//#define NTP_CMD		/* NTP commands */
-//#define CERT_CMD		/* Certificate management commands */
 
 /*
  * ROM-specific options
@@ -159,13 +151,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 #undef	NONPNP_HOOK_INT19	/* Hook INT19 on non-PnP BIOSes */
 #define	AUTOBOOT_ROM_FILTER	/* Autoboot only devices matching our ROM */
-
-/*
- * Virtual network devices
- *
- */
-#define VNIC_IPOIB		/* Infiniband IPoIB virtual NICs */
-//#define VNIC_XSIGO		/* Infiniband Xsigo virtual NICs */
 
 /*
  * Error message tables to include
@@ -191,9 +176,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #undef	GDBUDP			/* Remote GDB debugging over UDP
 				 * (both may be set) */
 //#define EFI_DOWNGRADE_UX	/* Downgrade UEFI user experience */
-#define	TIVOLI_VMM_WORKAROUND	/* Work around the Tivoli VMM's garbling of SSE
-				 * registers when iPXE traps to it due to
-				 * privileged instructions */
 
 #include <config/named.h>
 #include NAMED_CONFIG(general.h)

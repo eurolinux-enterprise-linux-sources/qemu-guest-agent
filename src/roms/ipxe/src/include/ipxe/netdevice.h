@@ -397,16 +397,9 @@ struct net_device {
 	struct retry_timer link_block;
 	/** Maximum packet length
 	 *
-	 * This is the maximum packet length (including any link-layer
-	 * headers) supported by the hardware.
+	 * This length includes any link-layer headers.
 	 */
 	size_t max_pkt_len;
-	/** Maximum transmission unit length
-	 *
-	 * This is the maximum transmission unit length (excluding any
-	 * link-layer headers) configured for the link.
-	 */
-	size_t mtu;
 	/** TX packet queue */
 	struct list_head tx_queue;
 	/** Deferred TX packet queue */

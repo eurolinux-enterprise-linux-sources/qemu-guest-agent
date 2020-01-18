@@ -21,12 +21,20 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "hw/hw.h"
 #include "hw/ppc/mac.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_host.h"
-#include "trace.h"
+
+/* debug UniNorth */
+//#define DEBUG_UNIN
+
+#ifdef DEBUG_UNIN
+#define UNIN_DPRINTF(fmt, ...)                                  \
+    do { printf("UNIN: " fmt , ## __VA_ARGS__); } while (0)
+#else
+#define UNIN_DPRINTF(fmt, ...)
+#endif
 
 static const int unin_irq_line[] = { 0x1b, 0x1c, 0x1d, 0x1e };
 
@@ -53,14 +61,20 @@ typedef struct UNINState {
 
 static int pci_unin_map_irq(PCIDevice *pci_dev, int irq_num)
 {
-    return (irq_num + (pci_dev->devfn >> 3)) & 3;
+    int retval;
+    int devfn = pci_dev->devfn & 0x00FFFFFF;
+
+    retval = (((devfn >> 11) & 0x1F) + irq_num) & 3;
+
+    return retval;
 }
 
 static void pci_unin_set_irq(void *opaque, int irq_num, int level)
 {
     qemu_irq *pic = opaque;
 
-    trace_unin_set_irq(unin_irq_line[irq_num], level);
+    UNIN_DPRINTF("%s: setting INT %d = %d\n", __func__,
+                 unin_irq_line[irq_num], level);
     qemu_set_irq(pic[unin_irq_line[irq_num]], level);
 }
 
@@ -93,7 +107,9 @@ static uint32_t unin_get_config_reg(uint32_t reg, uint32_t addr)
         retval |= func << 8;
     }
 
-    trace_unin_get_config_reg(reg, addr, retval);
+
+    UNIN_DPRINTF("Converted config space accessor %08x/%08x -> %08x\n",
+                 reg, addr, retval);
 
     return retval;
 }
@@ -103,7 +119,8 @@ static void unin_data_write(void *opaque, hwaddr addr,
 {
     UNINState *s = opaque;
     PCIHostState *phb = PCI_HOST_BRIDGE(s);
-    trace_unin_data_write(addr, len, val);
+    UNIN_DPRINTF("write addr %" TARGET_FMT_plx " len %d val %"PRIx64"\n",
+                 addr, len, val);
     pci_data_write(phb->bus,
                    unin_get_config_reg(phb->config_reg, addr),
                    val, len);
@@ -119,7 +136,8 @@ static uint64_t unin_data_read(void *opaque, hwaddr addr,
     val = pci_data_read(phb->bus,
                         unin_get_config_reg(phb->config_reg, addr),
                         len);
-    trace_unin_data_read(addr, len, val);
+    UNIN_DPRINTF("read addr %" TARGET_FMT_plx " len %d val %x\n",
+                 addr, len, val);
     return val;
 }
 
@@ -219,12 +237,12 @@ PCIBus *pci_pmac_init(qemu_irq *pic,
     memory_region_add_subregion(address_space_mem, 0x80000000ULL,
                                 &d->pci_hole);
 
-    h->bus = pci_register_root_bus(dev, NULL,
-                                   pci_unin_set_irq, pci_unin_map_irq,
-                                   pic,
-                                   &d->pci_mmio,
-                                   address_space_io,
-                                   PCI_DEVFN(11, 0), 4, TYPE_PCI_BUS);
+    h->bus = pci_register_bus(dev, NULL,
+                              pci_unin_set_irq, pci_unin_map_irq,
+                              pic,
+                              &d->pci_mmio,
+                              address_space_io,
+                              PCI_DEVFN(11, 0), 4, TYPE_PCI_BUS);
 
 #if 0
     pci_create_simple(h->bus, PCI_DEVFN(11, 0), "uni-north");
@@ -285,12 +303,12 @@ PCIBus *pci_pmac_u3_init(qemu_irq *pic,
     memory_region_add_subregion(address_space_mem, 0x80000000ULL,
                                 &d->pci_hole);
 
-    h->bus = pci_register_root_bus(dev, NULL,
-                                   pci_unin_set_irq, pci_unin_map_irq,
-                                   pic,
-                                   &d->pci_mmio,
-                                   address_space_io,
-                                   PCI_DEVFN(11, 0), 4, TYPE_PCI_BUS);
+    h->bus = pci_register_bus(dev, NULL,
+                              pci_unin_set_irq, pci_unin_map_irq,
+                              pic,
+                              &d->pci_mmio,
+                              address_space_io,
+                              PCI_DEVFN(11, 0), 4, TYPE_PCI_BUS);
 
     sysbus_mmio_map(s, 0, 0xf0800000);
     sysbus_mmio_map(s, 1, 0xf0c00000);
@@ -312,15 +330,6 @@ static void unin_agp_pci_host_realize(PCIDevice *d, Error **errp)
     d->config[0x0C] = 0x08; // cache_line_size
     d->config[0x0D] = 0x10; // latency_timer
     //    d->config[0x34] = 0x80; // capabilities_pointer
-    /*
-     * Set kMacRISCPCIAddressSelect (0x48) register to indicate PCI
-     * memory space with base 0x80000000, size 0x10000000 for Apple's
-     * AppleMacRiscPCI driver
-     */
-    d->config[0x48] = 0x0;
-    d->config[0x49] = 0x0;
-    d->config[0x4a] = 0x0;
-    d->config[0x4b] = 0x1;
 }
 
 static void u3_agp_pci_host_realize(PCIDevice *d, Error **errp)
@@ -352,7 +361,7 @@ static void unin_main_pci_host_class_init(ObjectClass *klass, void *data)
      * PCI-facing part of the host bridge, not usable without the
      * host-facing part, which can't be device_add'ed, yet.
      */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo unin_main_pci_host_info = {
@@ -360,10 +369,6 @@ static const TypeInfo unin_main_pci_host_info = {
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIDevice),
     .class_init = unin_main_pci_host_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void u3_agp_pci_host_class_init(ObjectClass *klass, void *data)
@@ -380,7 +385,7 @@ static void u3_agp_pci_host_class_init(ObjectClass *klass, void *data)
      * PCI-facing part of the host bridge, not usable without the
      * host-facing part, which can't be device_add'ed, yet.
      */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo u3_agp_pci_host_info = {
@@ -388,10 +393,6 @@ static const TypeInfo u3_agp_pci_host_info = {
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIDevice),
     .class_init = u3_agp_pci_host_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void unin_agp_pci_host_class_init(ObjectClass *klass, void *data)
@@ -408,7 +409,7 @@ static void unin_agp_pci_host_class_init(ObjectClass *klass, void *data)
      * PCI-facing part of the host bridge, not usable without the
      * host-facing part, which can't be device_add'ed, yet.
      */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo unin_agp_pci_host_info = {
@@ -416,10 +417,6 @@ static const TypeInfo unin_agp_pci_host_info = {
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIDevice),
     .class_init = unin_agp_pci_host_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void unin_internal_pci_host_class_init(ObjectClass *klass, void *data)
@@ -436,7 +433,7 @@ static void unin_internal_pci_host_class_init(ObjectClass *klass, void *data)
      * PCI-facing part of the host bridge, not usable without the
      * host-facing part, which can't be device_add'ed, yet.
      */
-    dc->user_creatable = false;
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo unin_internal_pci_host_info = {
@@ -444,10 +441,6 @@ static const TypeInfo unin_internal_pci_host_info = {
     .parent = TYPE_PCI_DEVICE,
     .instance_size = sizeof(PCIDevice),
     .class_init = unin_internal_pci_host_class_init,
-    .interfaces = (InterfaceInfo[]) {
-        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
-        { },
-    },
 };
 
 static void pci_unin_main_class_init(ObjectClass *klass, void *data)

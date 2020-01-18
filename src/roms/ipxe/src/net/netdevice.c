@@ -663,12 +663,6 @@ int register_netdev ( struct net_device *netdev ) {
 		ll_protocol->init_addr ( netdev->hw_addr, netdev->ll_addr );
 	}
 
-	/* Set MTU, if not already set */
-	if ( ! netdev->mtu ) {
-		netdev->mtu = ( netdev->max_pkt_len -
-				ll_protocol->ll_header_len );
-	}
-
 	/* Reject network devices that are already available via a
 	 * different hardware device.
 	 */
@@ -677,14 +671,6 @@ int register_netdev ( struct net_device *netdev ) {
 		DBGC ( netdev, "NETDEV rejecting duplicate (phys %s) of %s "
 		       "(phys %s)\n", netdev->dev->name, duplicate->name,
 		       duplicate->dev->name );
-		rc = -EEXIST;
-		goto err_duplicate;
-	}
-
-	/* Reject named network devices that already exist */
-	if ( netdev->name[0] && ( duplicate = find_netdev ( netdev->name ) ) ) {
-		DBGC ( netdev, "NETDEV rejecting duplicate name %s\n",
-		       duplicate->name );
 		rc = -EEXIST;
 		goto err_duplicate;
 	}
@@ -739,8 +725,6 @@ int register_netdev ( struct net_device *netdev ) {
 	clear_settings ( netdev_settings ( netdev ) );
 	unregister_settings ( netdev_settings ( netdev ) );
  err_register_settings:
-	list_del ( &netdev->list );
-	netdev_put ( netdev );
  err_duplicate:
 	return rc;
 }

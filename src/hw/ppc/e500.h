@@ -26,6 +26,4 @@ typedef struct PPCE500Params {
 
 void ppce500_init(MachineState *machine, PPCE500Params *params);
 
-hwaddr booke206_page_size_to_tlb(uint64_t size);
-
 #endif

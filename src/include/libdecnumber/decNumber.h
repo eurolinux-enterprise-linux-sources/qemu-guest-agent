@@ -32,14 +32,15 @@
 /* Decimal Number arithmetic module header			      */
 /* ------------------------------------------------------------------ */
 
-#ifndef DECNUMBER_H
-#define DECNUMBER_H
-
+#if !defined(DECNUMBER)
+  #define DECNUMBER
   #define DECNAME     "decNumber"			/* Short name */
   #define DECFULLNAME "Decimal Number Module"	      /* Verbose name */
   #define DECAUTHOR   "Mike Cowlishaw"		      /* Who to blame */
 
-  #include "libdecnumber/decContext.h"
+  #if !defined(DECCONTEXT)
+    #include "libdecnumber/decContext.h"
+  #endif
 
   /* Bit settings for decNumber.bits				      */
   #define DECNEG    0x80      /* Sign; 1=negative, 0=positive or zero */

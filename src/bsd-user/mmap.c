@@ -16,7 +16,13 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
-#include "qemu/osdep.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/mman.h>
 
 #include "qemu.h"
 #include "qemu-common.h"
@@ -24,8 +30,9 @@
 
 //#define DEBUG_MMAP
 
-static pthread_mutex_t mmap_mutex = PTHREAD_MUTEX_INITIALIZER;
-static __thread int mmap_lock_count;
+#if defined(CONFIG_USE_NPTL)
+pthread_mutex_t mmap_mutex;
+static int __thread mmap_lock_count;
 
 void mmap_lock(void)
 {
@@ -39,11 +46,6 @@ void mmap_unlock(void)
     if (--mmap_lock_count == 0) {
         pthread_mutex_unlock(&mmap_mutex);
     }
-}
-
-bool have_mmap_lock(void)
-{
-    return mmap_lock_count > 0 ? true : false;
 }
 
 /* Grab lock to make sure things are in a consistent state after fork().  */
@@ -61,6 +63,16 @@ void mmap_fork_end(int child)
     else
         pthread_mutex_unlock(&mmap_mutex);
 }
+#else
+/* We aren't threadsafe to start with, so no need to worry about locking.  */
+void mmap_lock(void)
+{
+}
+
+void mmap_unlock(void)
+{
+}
+#endif
 
 /* NOTE: all the constants are the HOST ones, but addresses are target. */
 int target_mprotect(abi_ulong start, abi_ulong len, int prot)
@@ -188,7 +200,12 @@ static int mmap_frag(abi_ulong real_start,
     return 0;
 }
 
+#if defined(__CYGWIN__)
+/* Cygwin doesn't have a whole lot of address space.  */
+static abi_ulong mmap_next_start = 0x18000000;
+#else
 static abi_ulong mmap_next_start = 0x40000000;
+#endif
 
 unsigned long last_brk;
 

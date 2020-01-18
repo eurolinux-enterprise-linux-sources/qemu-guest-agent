@@ -1,5 +1,5 @@
-#ifndef ALPHA_TARGET_SIGNAL_H
-#define ALPHA_TARGET_SIGNAL_H
+#ifndef TARGET_SIGNAL_H
+#define TARGET_SIGNAL_H
 
 #include "cpu.h"
 
@@ -26,7 +26,6 @@ static inline abi_ulong get_sp_from_cpustate(CPUAlphaState *state)
 {
     return state->ir[IR_SP];
 }
-
 
 /* From <asm/gentrap.h>.  */
 #define TARGET_GEN_INTOVF      -1      /* integer overflow */
@@ -55,4 +54,4 @@ static inline abi_ulong get_sp_from_cpustate(CPUAlphaState *state)
 #define TARGET_GEN_SUBRNG6     -24
 #define TARGET_GEN_SUBRNG7     -25
 
-#endif /* ALPHA_TARGET_SIGNAL_H */
+#endif /* TARGET_SIGNAL_H */

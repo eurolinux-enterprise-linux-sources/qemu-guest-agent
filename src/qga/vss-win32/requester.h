@@ -14,6 +14,7 @@
 #define VSS_WIN32_REQUESTER_H
 
 #include <basetyps.h>           /* STDAPI */
+#include "qemu/compiler.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,7 +28,7 @@ typedef void (*ErrorSetFunc)(struct Error **errp,
                              int win32_err, const char *fmt, ...)
     GCC_FMT_ATTR(6, 7);
 typedef struct ErrorSet {
-    ErrorSetFunc error_setg_win32_wrapper;
+    ErrorSetFunc error_setg_win32;
     struct Error **errp;        /* restriction: must not be null */
 } ErrorSet;
 

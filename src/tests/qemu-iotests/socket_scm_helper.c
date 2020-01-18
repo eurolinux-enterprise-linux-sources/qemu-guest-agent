@@ -10,9 +10,15 @@
  * See the COPYING.LIB file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
+#include <stdio.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* #define SOCKET_SCM_DEBUG */
 
@@ -60,7 +66,7 @@ static int send_fd(int fd, int fd_to_send)
 }
 
 /* Convert string to fd number. */
-static int get_fd_num(const char *fd_str, bool silent)
+static int get_fd_num(const char *fd_str)
 {
     int sock;
     char *err;
@@ -68,16 +74,12 @@ static int get_fd_num(const char *fd_str, bool silent)
     errno = 0;
     sock = strtol(fd_str, &err, 10);
     if (errno) {
-        if (!silent) {
-            fprintf(stderr, "Failed in strtol for socket fd, reason: %s\n",
-                    strerror(errno));
-        }
+        fprintf(stderr, "Failed in strtol for socket fd, reason: %s\n",
+                strerror(errno));
         return -1;
     }
     if (!*fd_str || *err || sock < 0) {
-        if (!silent) {
-            fprintf(stderr, "bad numerical value for socket fd '%s'\n", fd_str);
-        }
+        fprintf(stderr, "bad numerical value for socket fd '%s'\n", fd_str);
         return -1;
     }
 
@@ -108,21 +110,18 @@ int main(int argc, char **argv, char **envp)
     }
 
 
-    sock = get_fd_num(argv[1], false);
+    sock = get_fd_num(argv[1]);
     if (sock < 0) {
         return EXIT_FAILURE;
     }
 
-    fd = get_fd_num(argv[2], true);
+    /* Now only open a file in readonly mode for test purpose. If more precise
+       control is needed, use python script in file operation, which is
+       supposed to fork and exec this program. */
+    fd = open(argv[2], O_RDONLY);
     if (fd < 0) {
-        /* Now only open a file in readonly mode for test purpose. If more
-           precise control is needed, use python script in file operation, which
-           is supposed to fork and exec this program. */
-        fd = open(argv[2], O_RDONLY);
-        if (fd < 0) {
-            fprintf(stderr, "Failed to open file '%s'\n", argv[2]);
-            return EXIT_FAILURE;
-        }
+        fprintf(stderr, "Failed to open file '%s'\n", argv[2]);
+        return EXIT_FAILURE;
     }
 
     ret = send_fd(sock, fd);

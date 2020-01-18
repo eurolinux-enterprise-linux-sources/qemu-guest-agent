@@ -1,6 +1,5 @@
-#ifndef EXEC_USER_ABITYPES_H
-#define EXEC_USER_ABITYPES_H
-
+#ifndef QEMU_TYPES_H
+#define QEMU_TYPES_H
 #include "cpu.h"
 
 #ifdef TARGET_ABI32
@@ -13,10 +12,6 @@
 #define ABI_INT_ALIGNMENT 2
 #define ABI_LONG_ALIGNMENT 2
 #define ABI_LLONG_ALIGNMENT 2
-#endif
-
-#if defined(TARGET_I386) && !defined(TARGET_X86_64)
-#define ABI_LLONG_ALIGNMENT 4
 #endif
 
 #ifndef ABI_SHORT_ALIGNMENT

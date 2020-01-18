@@ -8,13 +8,11 @@
  * See the COPYING file in the top-level directory.
  */
 
-#include "qemu/osdep.h"
-#include <cacard/vscard_common.h>
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
 #include "ccid.h"
-#include "qapi/error.h"
+#include "cacard/vscard_common.h"
 
 #define DPRINTF(card, lvl, fmt, ...)                    \
 do {                                                    \
@@ -40,6 +38,8 @@ static const uint8_t DEFAULT_ATR[] = {
  0x13, 0x08
 };
 
+
+#define PASSTHRU_DEV_NAME "ccid-card-passthru"
 #define VSCARD_IN_SIZE 65536
 
 /* maximum size of ATR - from 7816-3 */
@@ -49,7 +49,7 @@ typedef struct PassthruState PassthruState;
 
 struct PassthruState {
     CCIDCardState base;
-    CharBackend cs;
+    CharDriverState *cs;
     uint8_t  vscard_in_data[VSCARD_IN_SIZE];
     uint32_t vscard_in_pos;
     uint32_t vscard_in_hdr;
@@ -57,10 +57,6 @@ struct PassthruState {
     uint8_t  atr_length;
     uint8_t  debug;
 };
-
-#define TYPE_CCID_PASSTHRU "ccid-card-passthru"
-#define PASSTHRU_CCID_CARD(obj) \
-    OBJECT_CHECK(PassthruState, (obj), TYPE_CCID_PASSTHRU)
 
 /*
  * VSCard protocol over chardev
@@ -76,11 +72,8 @@ static void ccid_card_vscard_send_msg(PassthruState *s,
     scr_msg_header.type = htonl(type);
     scr_msg_header.reader_id = htonl(reader_id);
     scr_msg_header.length = htonl(length);
-    /* XXX this blocks entire thread. Rewrite to use
-     * qemu_chr_fe_write and background I/O callbacks */
-    qemu_chr_fe_write_all(&s->cs, (uint8_t *)&scr_msg_header,
-                          sizeof(VSCMsgHeader));
-    qemu_chr_fe_write_all(&s->cs, payload, length);
+    qemu_chr_fe_write(s->cs, (uint8_t *)&scr_msg_header, sizeof(VSCMsgHeader));
+    qemu_chr_fe_write(s->cs, payload, length);
 }
 
 static void ccid_card_vscard_send_apdu(PassthruState *s,
@@ -265,7 +258,7 @@ static void ccid_card_vscard_handle_message(PassthruState *card,
 
 static void ccid_card_vscard_drop_connection(PassthruState *card)
 {
-    qemu_chr_fe_deinit(&card->cs, true);
+    qemu_chr_delete(card->cs);
     card->vscard_in_pos = card->vscard_in_hdr = 0;
 }
 
@@ -310,6 +303,8 @@ static void ccid_card_vscard_event(void *opaque, int event)
     case CHR_EVENT_BREAK:
         card->vscard_in_pos = card->vscard_in_hdr = 0;
         break;
+    case CHR_EVENT_FOCUS:
+        break;
     case CHR_EVENT_OPENED:
         DPRINTF(card, D_INFO, "%s: CHR_EVENT_OPENED\n", __func__);
         break;
@@ -321,9 +316,9 @@ static void ccid_card_vscard_event(void *opaque, int event)
 static void passthru_apdu_from_guest(
     CCIDCardState *base, const uint8_t *apdu, uint32_t len)
 {
-    PassthruState *card = PASSTHRU_CCID_CARD(base);
+    PassthruState *card = DO_UPCAST(PassthruState, base, base);
 
-    if (!qemu_chr_fe_backend_connected(&card->cs)) {
+    if (!card->cs) {
         printf("ccid-passthru: no chardev, discarding apdu length %d\n", len);
         return;
     }
@@ -332,34 +327,40 @@ static void passthru_apdu_from_guest(
 
 static const uint8_t *passthru_get_atr(CCIDCardState *base, uint32_t *len)
 {
-    PassthruState *card = PASSTHRU_CCID_CARD(base);
+    PassthruState *card = DO_UPCAST(PassthruState, base, base);
 
     *len = card->atr_length;
     return card->atr;
 }
 
-static void passthru_realize(CCIDCardState *base, Error **errp)
+static int passthru_initfn(CCIDCardState *base)
 {
-    PassthruState *card = PASSTHRU_CCID_CARD(base);
+    PassthruState *card = DO_UPCAST(PassthruState, base, base);
 
     card->vscard_in_pos = 0;
     card->vscard_in_hdr = 0;
-    if (qemu_chr_fe_backend_connected(&card->cs)) {
-        error_setg(errp, "ccid-card-passthru: initing chardev");
-        qemu_chr_fe_set_handlers(&card->cs,
+    if (card->cs) {
+        DPRINTF(card, D_INFO, "initing chardev\n");
+        qemu_chr_add_handlers(card->cs,
             ccid_card_vscard_can_read,
             ccid_card_vscard_read,
-            ccid_card_vscard_event, NULL, card, NULL, true);
+            ccid_card_vscard_event, card);
         ccid_card_vscard_send_init(card);
     } else {
-        error_setg(errp, "missing chardev");
-        return;
+        error_report("missing chardev");
+        return -1;
     }
     card->debug = parse_debug_env("QEMU_CCID_PASSTHRU_DEBUG", D_VERBOSE,
                                   card->debug);
     assert(sizeof(DEFAULT_ATR) <= MAX_ATR_SIZE);
     memcpy(card->atr, DEFAULT_ATR, sizeof(DEFAULT_ATR));
     card->atr_length = sizeof(DEFAULT_ATR);
+    return 0;
+}
+
+static int passthru_exitfn(CCIDCardState *base)
+{
+    return 0;
 }
 
 static VMStateDescription passthru_vmstate = {
@@ -387,7 +388,8 @@ static void passthru_class_initfn(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     CCIDCardClass *cc = CCID_CARD_CLASS(klass);
 
-    cc->realize = passthru_realize;
+    cc->initfn = passthru_initfn;
+    cc->exitfn = passthru_exitfn;
     cc->get_atr = passthru_get_atr;
     cc->apdu_from_guest = passthru_apdu_from_guest;
     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
@@ -397,7 +399,7 @@ static void passthru_class_initfn(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo passthru_card_info = {
-    .name          = TYPE_CCID_PASSTHRU,
+    .name          = PASSTHRU_DEV_NAME,
     .parent        = TYPE_CCID_CARD,
     .instance_size = sizeof(PassthruState),
     .class_init    = passthru_class_initfn,

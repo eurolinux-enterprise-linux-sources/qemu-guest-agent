@@ -1,5 +1,5 @@
 #ifndef HW_PCMCIA_H
-#define HW_PCMCIA_H
+#define HW_PCMCIA_H 1
 
 /* PCMCIA/Cardbus */
 

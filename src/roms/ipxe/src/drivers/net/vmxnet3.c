@@ -92,23 +92,18 @@ static int vmxnet3_transmit ( struct net_device *netdev,
 			      struct io_buffer *iobuf ) {
 	struct vmxnet3_nic *vmxnet = netdev_priv ( netdev );
 	struct vmxnet3_tx_desc *tx_desc;
-	unsigned int fill;
 	unsigned int desc_idx;
 	unsigned int generation;
 
 	/* Check that we have a free transmit descriptor */
-	fill = ( vmxnet->count.tx_prod - vmxnet->count.tx_cons );
-	if ( fill >= VMXNET3_TX_FILL ) {
+	desc_idx = ( vmxnet->count.tx_prod % VMXNET3_NUM_TX_DESC );
+	generation = ( ( vmxnet->count.tx_prod & VMXNET3_NUM_TX_DESC ) ?
+		       0 : cpu_to_le32 ( VMXNET3_TXF_GEN ) );
+	if ( vmxnet->tx_iobuf[desc_idx] ) {
 		DBGC ( vmxnet, "VMXNET3 %p out of transmit descriptors\n",
 		       vmxnet );
 		return -ENOBUFS;
 	}
-
-	/* Locate transmit descriptor */
-	desc_idx = ( vmxnet->count.tx_prod % VMXNET3_NUM_TX_DESC );
-	generation = ( ( vmxnet->count.tx_prod & VMXNET3_NUM_TX_DESC ) ?
-		       0 : cpu_to_le32 ( VMXNET3_TXF_GEN ) );
-	assert ( vmxnet->tx_iobuf[desc_idx] == NULL );
 
 	/* Increment producer counter */
 	vmxnet->count.tx_prod++;

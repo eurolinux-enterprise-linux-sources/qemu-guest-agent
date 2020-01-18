@@ -27,7 +27,6 @@
  * IRQs are passed to GIC through Combiner.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
 
 #include "hw/arm/exynos4210.h"
@@ -406,11 +405,10 @@ static const MemoryRegionOps exynos4210_combiner_ops = {
 /*
  * Internal Combiner initialization.
  */
-static void exynos4210_combiner_init(Object *obj)
+static int exynos4210_combiner_init(SysBusDevice *sbd)
 {
-    DeviceState *dev = DEVICE(obj);
-    Exynos4210CombinerState *s = EXYNOS4210_COMBINER(obj);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+    DeviceState *dev = DEVICE(sbd);
+    Exynos4210CombinerState *s = EXYNOS4210_COMBINER(dev);
     unsigned int i;
 
     /* Allocate general purpose input signals and connect a handler to each of
@@ -422,9 +420,11 @@ static void exynos4210_combiner_init(Object *obj)
         sysbus_init_irq(sbd, &s->output_irq[i]);
     }
 
-    memory_region_init_io(&s->iomem, obj, &exynos4210_combiner_ops, s,
+    memory_region_init_io(&s->iomem, OBJECT(s), &exynos4210_combiner_ops, s,
                           "exynos4210-combiner", IIC_REGION_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
+
+    return 0;
 }
 
 static Property exynos4210_combiner_properties[] = {
@@ -435,7 +435,9 @@ static Property exynos4210_combiner_properties[] = {
 static void exynos4210_combiner_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
+    k->init = exynos4210_combiner_init;
     dc->reset = exynos4210_combiner_reset;
     dc->props = exynos4210_combiner_properties;
     dc->vmsd = &vmstate_exynos4210_combiner;
@@ -445,7 +447,6 @@ static const TypeInfo exynos4210_combiner_info = {
     .name          = TYPE_EXYNOS4210_COMBINER,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(Exynos4210CombinerState),
-    .instance_init = exynos4210_combiner_init,
     .class_init    = exynos4210_combiner_class_init,
 };
 

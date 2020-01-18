@@ -24,11 +24,10 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
-#include "qapi/error.h"
 #include "hw/hw.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 #include "hw/isa/isa.h"
+#include "hw/i386/pc.h"
 
 #define TYPE_ISA_DEBUGCON_DEVICE "isa-debugcon"
 #define ISA_DEBUGCON_DEVICE(obj) \
@@ -38,7 +37,7 @@
 
 typedef struct DebugconState {
     MemoryRegion io;
-    CharBackend chr;
+    CharDriverState *chr;
     uint32_t readback;
 } DebugconState;
 
@@ -59,9 +58,7 @@ static void debugcon_ioport_write(void *opaque, hwaddr addr, uint64_t val,
     printf(" [debugcon: write addr=0x%04" HWADDR_PRIx " val=0x%02" PRIx64 "]\n", addr, val);
 #endif
 
-    /* XXX this blocks entire thread. Rewrite to use
-     * qemu_chr_fe_write and background I/O callbacks */
-    qemu_chr_fe_write_all(&s->chr, &ch, 1);
+    qemu_chr_fe_write(s->chr, &ch, 1);
 }
 
 
@@ -86,12 +83,12 @@ static const MemoryRegionOps debugcon_ops = {
 
 static void debugcon_realize_core(DebugconState *s, Error **errp)
 {
-    if (!qemu_chr_fe_backend_connected(&s->chr)) {
+    if (!s->chr) {
         error_setg(errp, "Can't create debugcon device, empty char device");
         return;
     }
 
-    qemu_chr_fe_set_handlers(&s->chr, NULL, NULL, NULL, NULL, s, NULL, true);
+    qemu_chr_add_handlers(s->chr, NULL, NULL, NULL, s);
 }
 
 static void debugcon_isa_realizefn(DeviceState *dev, Error **errp)

@@ -22,9 +22,8 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "hw/sysbus.h"
-#include "chardev/char-fe.h"
+#include "sysemu/char.h"
 #include "qemu/log.h"
 
 #define D(x)
@@ -53,7 +52,7 @@ typedef struct ETRAXSerial {
     SysBusDevice parent_obj;
 
     MemoryRegion mmio;
-    CharBackend chr;
+    CharDriverState *chr;
     qemu_irq irq;
 
     int pending_tx;
@@ -126,9 +125,7 @@ ser_write(void *opaque, hwaddr addr,
     switch (addr)
     {
         case RW_DOUT:
-            /* XXX this blocks entire thread. Rewrite to use
-             * qemu_chr_fe_write and background I/O callbacks */
-            qemu_chr_fe_write_all(&s->chr, &ch, 1);
+            qemu_chr_fe_write(s->chr, &ch, 1);
             s->regs[R_INTR] |= 3;
             s->pending_tx = 1;
             s->regs[addr] = value;
@@ -161,11 +158,6 @@ static const MemoryRegionOps ser_ops = {
     }
 };
 
-static Property etraxfs_ser_properties[] = {
-    DEFINE_PROP_CHR("chardev", ETRAXSerial, chr),
-    DEFINE_PROP_END_OF_LIST(),
-};
-
 static void serial_receive(void *opaque, const uint8_t *buf, int size)
 {
     ETRAXSerial *s = opaque;
@@ -173,7 +165,7 @@ static void serial_receive(void *opaque, const uint8_t *buf, int size)
 
     /* Got a byte.  */
     if (s->rx_fifo_len >= 16) {
-        D(qemu_log("WARNING: UART dropped char.\n"));
+        qemu_log("WARNING: UART dropped char.\n");
         return;
     }
 
@@ -216,40 +208,40 @@ static void etraxfs_ser_reset(DeviceState *d)
 
 }
 
-static void etraxfs_ser_init(Object *obj)
-{
-    ETRAXSerial *s = ETRAX_SERIAL(obj);
-    SysBusDevice *dev = SYS_BUS_DEVICE(obj);
-
-    sysbus_init_irq(dev, &s->irq);
-    memory_region_init_io(&s->mmio, obj, &ser_ops, s,
-                          "etraxfs-serial", R_MAX * 4);
-    sysbus_init_mmio(dev, &s->mmio);
-}
-
-static void etraxfs_ser_realize(DeviceState *dev, Error **errp)
+static int etraxfs_ser_init(SysBusDevice *dev)
 {
     ETRAXSerial *s = ETRAX_SERIAL(dev);
 
-    qemu_chr_fe_set_handlers(&s->chr,
-                             serial_can_receive, serial_receive,
-                             serial_event, NULL, s, NULL, true);
+    sysbus_init_irq(dev, &s->irq);
+    memory_region_init_io(&s->mmio, OBJECT(s), &ser_ops, s,
+                          "etraxfs-serial", R_MAX * 4);
+    sysbus_init_mmio(dev, &s->mmio);
+
+    /* FIXME use a qdev chardev prop instead of qemu_char_get_next_serial() */
+    s->chr = qemu_char_get_next_serial();
+    if (s->chr) {
+        qemu_chr_add_handlers(s->chr,
+                              serial_can_receive, serial_receive,
+                              serial_event, s);
+    }
+    return 0;
 }
 
 static void etraxfs_ser_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
+    SysBusDeviceClass *k = SYS_BUS_DEVICE_CLASS(klass);
 
+    k->init = etraxfs_ser_init;
     dc->reset = etraxfs_ser_reset;
-    dc->props = etraxfs_ser_properties;
-    dc->realize = etraxfs_ser_realize;
+    /* Reason: init() method uses qemu_char_get_next_serial() */
+    dc->cannot_instantiate_with_device_add_yet = true;
 }
 
 static const TypeInfo etraxfs_ser_info = {
     .name          = TYPE_ETRAX_FS_SERIAL,
     .parent        = TYPE_SYS_BUS_DEVICE,
     .instance_size = sizeof(ETRAXSerial),
-    .instance_init = etraxfs_ser_init,
     .class_init    = etraxfs_ser_class_init,
 };
 

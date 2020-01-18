@@ -21,7 +21,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
+#include <stdio.h>
+#include <sys/time.h>
 #include "hw/hw.h"
 #include "exec/address-spaces.h"
 #include "qemu-common.h"
@@ -440,16 +441,13 @@ static int channel_out_run(struct fs_dma_ctrl *ctrl, int c)
 		D(printf("channel %d pushes %x %u bytes eop=%u\n", c,
 		         saved_data_buf, len, out_eop));
 
-		if (ctrl->channels[c].client->client.push) {
-                        if (len > 0) {
-				ctrl->channels[c].client->client.push(
-					ctrl->channels[c].client->client.opaque,
-					buf, len, out_eop);
-			}
-		} else {
+		if (ctrl->channels[c].client->client.push)
+			ctrl->channels[c].client->client.push(
+				ctrl->channels[c].client->client.opaque,
+				buf, len, out_eop);
+		else
 			printf("WARNING: DMA ch%d dataloss,"
 			       " no attached client.\n", c);
-		}
 
 		saved_data_buf += len;
 

@@ -41,7 +41,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/crc32.h>
 #include <ipxe/ocsp.h>
 #include <ipxe/validator.h>
-#include <config/crypto.h>
 
 /** @file
  *
@@ -134,7 +133,7 @@ const struct setting crosscert_setting __setting ( SETTING_CRYPTO, crosscert )={
 };
 
 /** Default cross-signed certificate source */
-static const char crosscert_default[] = CROSSCERT;
+static const char crosscert_default[] = "http://ca.ipxe.org/auto";
 
 /**
  * Append cross-signing certificates to certificate chain
@@ -478,7 +477,7 @@ static void validator_step ( struct validator *validator ) {
 		issuer = link->cert;
 		if ( ! cert )
 			continue;
-		if ( ! x509_is_valid ( issuer ) )
+		if ( ! issuer->valid )
 			continue;
 		/* The issuer is valid, but this certificate is not
 		 * yet valid.  If OCSP is applicable, start it.

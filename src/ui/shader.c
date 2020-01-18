@@ -24,23 +24,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "ui/shader.h"
 
-#include "shader/texture-blit-vert.h"
-#include "shader/texture-blit-flip-vert.h"
-#include "shader/texture-blit-frag.h"
-
-struct QemuGLShader {
-    GLint texture_blit_prog;
-    GLint texture_blit_flip_prog;
-    GLint texture_blit_vao;
-};
-
 /* ---------------------------------------------------------------------- */
 
-static GLuint qemu_gl_init_texture_blit(GLint texture_blit_prog)
+GLuint qemu_gl_init_texture_blit(GLint texture_blit_prog)
 {
     static const GLfloat in_position[] = {
         -1, -1,
@@ -70,18 +59,17 @@ static GLuint qemu_gl_init_texture_blit(GLint texture_blit_prog)
     return vao;
 }
 
-void qemu_gl_run_texture_blit(QemuGLShader *gls, bool flip)
+void qemu_gl_run_texture_blit(GLint texture_blit_prog,
+                              GLint texture_blit_vao)
 {
-    glUseProgram(flip
-                 ? gls->texture_blit_flip_prog
-                 : gls->texture_blit_prog);
-    glBindVertexArray(gls->texture_blit_vao);
+    glUseProgram(texture_blit_prog);
+    glBindVertexArray(texture_blit_vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
 /* ---------------------------------------------------------------------- */
 
-static GLuint qemu_gl_create_compile_shader(GLenum type, const GLchar *src)
+GLuint qemu_gl_create_compile_shader(GLenum type, const GLchar *src)
 {
     GLuint shader;
     GLint status, length;
@@ -94,18 +82,18 @@ static GLuint qemu_gl_create_compile_shader(GLenum type, const GLchar *src)
     glGetShaderiv(shader, GL_COMPILE_STATUS, &status);
     if (!status) {
         glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
-        errmsg = g_malloc(length);
+        errmsg = malloc(length);
         glGetShaderInfoLog(shader, length, &length, errmsg);
         fprintf(stderr, "%s: compile %s error\n%s\n", __func__,
                 (type == GL_VERTEX_SHADER) ? "vertex" : "fragment",
                 errmsg);
-        g_free(errmsg);
+        free(errmsg);
         return 0;
     }
     return shader;
 }
 
-static GLuint qemu_gl_create_link_program(GLuint vert, GLuint frag)
+GLuint qemu_gl_create_link_program(GLuint vert, GLuint frag)
 {
     GLuint program;
     GLint status, length;
@@ -119,17 +107,17 @@ static GLuint qemu_gl_create_link_program(GLuint vert, GLuint frag)
     glGetProgramiv(program, GL_LINK_STATUS, &status);
     if (!status) {
         glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
-        errmsg = g_malloc(length);
+        errmsg = malloc(length);
         glGetProgramInfoLog(program, length, &length, errmsg);
         fprintf(stderr, "%s: link program: %s\n", __func__, errmsg);
-        g_free(errmsg);
+        free(errmsg);
         return 0;
     }
     return program;
 }
 
-static GLuint qemu_gl_create_compile_link_program(const GLchar *vert_src,
-                                                  const GLchar *frag_src)
+GLuint qemu_gl_create_compile_link_program(const GLchar *vert_src,
+                                           const GLchar *frag_src)
 {
     GLuint vert_shader, frag_shader, program;
 
@@ -144,32 +132,4 @@ static GLuint qemu_gl_create_compile_link_program(const GLchar *vert_src,
     glDeleteShader(frag_shader);
 
     return program;
-}
-
-/* ---------------------------------------------------------------------- */
-
-QemuGLShader *qemu_gl_init_shader(void)
-{
-    QemuGLShader *gls = g_new0(QemuGLShader, 1);
-
-    gls->texture_blit_prog = qemu_gl_create_compile_link_program
-        (texture_blit_vert_src, texture_blit_frag_src);
-    gls->texture_blit_flip_prog = qemu_gl_create_compile_link_program
-        (texture_blit_flip_vert_src, texture_blit_frag_src);
-    if (!gls->texture_blit_prog || !gls->texture_blit_flip_prog) {
-        exit(1);
-    }
-
-    gls->texture_blit_vao =
-        qemu_gl_init_texture_blit(gls->texture_blit_prog);
-
-    return gls;
-}
-
-void qemu_gl_fini_shader(QemuGLShader *gls)
-{
-    if (!gls) {
-        return;
-    }
-    g_free(gls);
 }

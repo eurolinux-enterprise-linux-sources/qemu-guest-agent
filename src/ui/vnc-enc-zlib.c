@@ -24,7 +24,6 @@
  * THE SOFTWARE.
  */
 
-#include "qemu/osdep.h"
 #include "vnc.h"
 
 #define ZALLOC_ALIGNMENT 16
